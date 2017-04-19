@@ -14,6 +14,7 @@
 
 import contextlib
 import datetime
+import eventlet
 import itertools
 import operator
 import os
@@ -29,7 +30,6 @@ from oslo_utils import timeutils
 from oslo_utils import units
 from oslo_utils import versionutils
 
-from nova.api.metadata import base as instance_metadata
 from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
@@ -41,12 +41,9 @@ from nova.image import api as image_api
 from nova.image import glance
 from nova.objects import migrate_data as migrate_data_obj
 from nova import utils
-from nova.virt import configdrive
 from nova.virt import driver
 from nova.virt.zvm import conf
-from nova.virt.zvm import configdrive as zvmconfigdrive
 from nova.virt.zvm import const
-from nova.virt.zvm import dist
 from nova.virt.zvm import exception
 from nova.virt.zvm import imageop
 from nova.virt.zvm import instance as zvminstance
@@ -54,14 +51,14 @@ from nova.virt.zvm import networkop
 from nova.virt.zvm import utils as zvmutils
 from nova.virt.zvm import volumeop
 from nova.volume import cinder
-
+from zvmsdk import api as zvm_api
+from zvmsdk import dist
 
 LOG = logging.getLogger(__name__)
 
 CONF = conf.CONF
 CONF.import_opt('host', 'nova.conf')
 CONF.import_opt('my_ip', 'nova.conf')
-
 ZVMInstance = zvminstance.ZVMInstance
 
 
@@ -78,6 +75,15 @@ class ZVMDriver(driver.ComputeDriver):
     def __init__(self, virtapi):
         super(ZVMDriver, self).__init__(virtapi)
         self._xcat_url = zvmutils.get_xcat_url()
+        self._sdk_api = zvm_api.SDKAPI()
+        self._vmutils = zvmutils.VMUtils()
+
+        self._image_api = image_api.API()
+        self._dist_manager = dist.ListDistManager()
+        self._pathutils = zvmutils.PathUtils()
+        self._imageutils = zvmutils.ImageUtils()
+        self._networkutils = zvmutils.NetworkUtils()
+        self._imageop_semaphore = eventlet.semaphore.Semaphore(1)
 
         # incremental sleep interval list
         _inc_slp = [5, 10, 20, 30, 60]
@@ -123,6 +129,7 @@ class ZVMDriver(driver.ComputeDriver):
         self._volume_api = cinder.API()
         self._dist_manager = dist.ListDistManager()
         self._image_api = image_api.API()
+        self._vmutils = zvmutils.VMUtils()
 
     def init_host(self, host):
         """Initialize anything that is necessary for the driver to function,
@@ -222,256 +229,67 @@ class ZVMDriver(driver.ComputeDriver):
                                   attached to the instance.
 
         """
-        # For zVM instance, limit the maximum length of instance name to be 8
-        if len(instance['name']) > 8:
-            msg = (_("Don't support spawn vm on zVM hypervisor with instance "
-                "name: %s, please change your instance_name_template to make "
-                "sure the length of instance name is not longer than 8 "
-                "characters") % instance['name'])
-            raise nova_exception.InvalidInput(reason=msg)
-
-        root_mount_device, boot_from_volume = zvmutils.is_boot_from_volume(
-                                                            block_device_info)
-        bdm = driver.block_device_info_get_mapping(block_device_info)
-
-        if not network_info:
-            msg = _("Not support boot without a NIC.")
-            raise exception.ZVMDriverError(msg=msg)
-
-        # Use image_type to distinguish the image that is for normal deploy
-        # and volume snapshot image
-        image_type = ''
-        # Ensure the used image is a valid zVM image
-        if not boot_from_volume:
-            # This is because commit fbe31e461ac3f16edb795993558a2314b4c16b52
-            # changes the image_meta from dict to object, we have several
-            # unique property can't be handled well
-            # see bug 1537921 for detail info
-            image_meta = self._image_api.get(context, image_meta.id)
-            self._zvm_images.zimage_check(image_meta)
-            if 'image_comments' not in image_meta['properties']:
-                image_type = 'xcatconf4z'
-            else:
-                image_type = 'cloudimg'
-        else:
-            image_type = 'volume-snapshot'
-
-        compute_node = CONF.zvm_host
-        hcp_info = self._get_hcp_info()
-        zhcp = hcp_info['hostname']
-        zhcp_userid = hcp_info['userid']
-
-        zvm_inst = ZVMInstance(self, instance)
-        instance_path = self._pathutils.get_instance_path(compute_node,
-                                                          zvm_inst._name)
-        # Create network configuration files
-        LOG.debug('Creating network configuration files '
-                  'for instance: %s' % zvm_inst._name, instance=instance)
-        base_nic_vdev = CONF.zvm_default_nic_vdev
-
-        if not boot_from_volume:
-            os_version = image_meta['properties']['os_version']
-        else:
-            volume_id = self._extract_volume_id(bdm, root_mount_device)
-            volume_summery = self._volume_api.get(context, volume_id)
-            volume_meta = volume_summery['volume_metadata']
-            os_version = volume_meta['os_version']
-            instance.system_metadata['image_os_version'] = os_version
-            instance.save()
-
-        linuxdist = self._dist_manager.get_linux_dist(os_version)()
-        files_and_cmds = linuxdist.create_network_configuration_files(
-                             instance_path, network_info, base_nic_vdev)
-        (net_conf_files, net_conf_cmds) = files_and_cmds
-        # Add network configure files to inject_files
-        if len(net_conf_files) > 0:
-            injected_files.extend(net_conf_files)
-
-        # Create configure drive
-        if not CONF.zvm_config_drive_inject_password:
-            admin_password = CONF.zvm_image_default_password
-        transportfiles = None
-        if configdrive.required_by(instance):
-            transportfiles = self._create_config_drive(context, instance_path,
-                                instance, injected_files, admin_password,
-                                net_conf_cmds, linuxdist, image_type)
-
-        LOG.info(_LI("The instance %(name)s is spawning at %(node)s") %
-                 {'name': zvm_inst._name, 'node': compute_node},
-                 instance=instance)
-
-        spawn_start = time.time()
-
         try:
-            deploy_image_name = None
-            if not boot_from_volume:
-                tmp_file_fn = None
-                bundle_file_path = None
-                if 'root_disk_units' not in image_meta['properties']:
-                    (tmp_file_fn, image_file_path,
-                     bundle_file_path) = self._import_image_to_nova(context,
-                                                    instance, image_meta)
-                    image_meta = self._zvm_images.set_image_root_disk_units(
-                                    context, image_meta, image_file_path)
-                image_in_xcat = self._zvm_images.image_exist_xcat(
-                                    instance['image_ref'])
-                if not image_in_xcat:
-                    self._import_image_to_xcat(context, instance, image_meta,
-                                               tmp_file_fn)
-                elif bundle_file_path is not None:
-                    self._pathutils.clean_temp_folder(bundle_file_path)
+            LOG.info(_LI("Spawning new instance %(node) on zVM hypervisor") %
+                     instance['name'], instance=instance)
+            # Validate VM ID on zVM hypervisor
+            self._sdk_api.validate_vm_id(instance['name'])
+            spawn_start = time.time()
+            image_meta = self._image_api.get(context, image_meta.id)
+            os_version = image_meta['properties']['os_version']
+            linuxdist = self._dist_manager.get_linux_dist(os_version)()
 
-                deploy_image_name = self._zvm_images.get_imgname_xcat(
-                                        instance['image_ref'])
+            # TODO(YaLian) will remove network files from this
+            transportfiles = self._vmutils.generate_configdrive(
+                            context, instance, os_version, network_info,
+                            injected_files, admin_password, linuxdist)
 
-            # Create xCAT node and userid for the instance
-            zvm_inst.create_xcat_node(zhcp)
-            zvm_inst.create_userid(block_device_info, image_meta, context,
-                                   deploy_image_name)
+            with self._imageop_semaphore:
+                spawn_image_exist = self._sdk_api.check_image_exist(
+                                    image_meta['id'])
+                if not spawn_image_exist:
+                    self._imageutils.prepare_spawn_image(
+                        context, image_meta['id'], os_version)
+
+            spawn_image_name = self._sdk_api.get_image_name(
+                                    image_meta['id'])
+            eph_disks = block_device_info.get('ephemerals', [])
+            self._sdk_api.create_vm(instance['name'], instance['vcpus'],
+                                    instance['memory_mb'],
+                                    instance['root_gb'],
+                                    eph_disks, spawn_image_name)
 
             # Setup network for z/VM instance
-            self._preset_instance_network(zvm_inst._name, network_info)
-            self._add_nic_to_table(zvm_inst._name, network_info)
+            self._preset_instance_network(instance['name'], network_info)
+            self._add_nic_to_table(instance['name'], network_info)
 
-            # Call nodeset restapi to deploy image on node
-            if not boot_from_volume:
-                zvm_inst.update_node_info(image_meta)
-                zvm_inst.deploy_node(deploy_image_name, transportfiles)
-            else:
-                zvmutils.punch_configdrive_file(transportfiles, zvm_inst._name)
+            self._sdk_api.deploy_image_to_vm(spawn_image_name, transportfiles)
 
-            if image_type in ['xcatconf4z', 'volume-snapshot']:
-                # Change vm's admin password during spawn
-                zvmutils.punch_adminpass_file(instance_path, zvm_inst._name,
-                                              admin_password, linuxdist)
-                # Unlock the instance
-                zvmutils.punch_xcat_auth_file(instance_path, zvm_inst._name)
-                if zvmutils.xcat_support_iucv(self._xcat_version):
-                    # Punch IUCV server files to reader.
-                    zvmutils.punch_iucv_file(os_version, zhcp, zhcp_userid,
-                                            zvm_inst._name, instance_path)
-
-            # punch ephemeral disk info to the instance
+            # Handle ephemeral disk
             if instance['ephemeral_gb'] != 0:
                 eph_disks = block_device_info.get('ephemerals', [])
-                if eph_disks == []:
-                    zvmutils.process_eph_disk(zvm_inst._name)
-                else:
-                    for idx, eph in enumerate(eph_disks):
-                        vdev = zvmutils.generate_eph_vdev(idx)
-                        fmt = eph.get('guest_format')
-                        mount_dir = ''.join([CONF.zvm_default_ephemeral_mntdir,
-                                             str(idx)])
-                        zvmutils.process_eph_disk(zvm_inst._name, vdev, fmt,
-                                                  mount_dir)
+                self._sdk_api.process_addtional_disks(eph_disks)
 
-            # Wait neutron zvm-agent add NIC information to user direct.
-            self._wait_and_get_nic_direct(zvm_inst._name, instance)
+                # TODO(YaLian): Move this to utils.py
+                self._wait_and_get_nic_direct(instance['name'], instance)
 
-            # Attach persistent volume, exclude root volume
-            bdm_attach = list(bdm)
-            bdm_attach = self._exclude_root_volume_bdm(bdm_attach,
-                                                       root_mount_device)
-            self._attach_volume_to_instance(context, instance, bdm_attach)
-
-            # 1. Prepare for booting from volume
-            # 2. Write the zipl.conf file and issue zipl
-            if boot_from_volume:
-                (lun, wwpn, size, fcp) = zvm_inst.prepare_volume_boot(context,
-                                            instance, bdm, root_mount_device,
-                                            volume_meta)
-                zvmutils.punch_zipl_file(instance_path, zvm_inst._name,
-                                         lun, wwpn, fcp, volume_meta)
-
-            # Power on the instance, then put MN's public key into instance
-            zvm_inst.power_on()
-
-            # Update the root device name in instance table
-            root_device_name = '/dev/' + const.ZVM_DEFAULT_ROOT_DISK
-            if boot_from_volume:
-                root_device_name = root_mount_device
-            instance.root_device_name = root_device_name
-            instance.save()
-
-            spawn_time = time.time() - spawn_start
-            LOG.info(_LI("Instance spawned succeeded in %s seconds") %
-                     spawn_time, instance=instance)
-        except (exception.ZVMXCATCreateNodeFailed,
-                exception.ZVMImageError):
-            with excutils.save_and_reraise_exception():
-                zvm_inst.delete_xcat_node()
-        except (exception.ZVMXCATCreateUserIdFailed,
-                exception.ZVMNetworkError,
-                exception.ZVMVolumeError,
-                exception.ZVMXCATUpdateNodeFailed,
-                exception.ZVMXCATDeployNodeFailed):
-            with excutils.save_and_reraise_exception():
-                self.destroy(context, instance, network_info,
-                             block_device_info)
+                self._compute_api.power_on(instance['name'])
+                spawn_time = time.time() - spawn_start
+                LOG.info(_LI("Instance spawned succeeded in %s seconds") %
+                         spawn_time, instance=instance)
         except Exception as err:
-            # Just a error log then re-raise
             with excutils.save_and_reraise_exception():
                 LOG.error(_("Deploy image to instance %(instance)s "
                             "failed with reason: %(err)s") %
-                          {'instance': zvm_inst._name, 'err': err},
+                          {'instance': instance['name'], 'err': err},
                           instance=instance)
-        finally:
-            self._pathutils.clean_temp_folder(instance_path)
-
-        # Update image last deploy date in xCAT osimage table
-        if not boot_from_volume:
-            self._zvm_images.update_last_use_date(deploy_image_name)
-
-    def _create_config_drive(self, context, instance_path, instance,
-                             injected_files, admin_password, commands,
-                             linuxdist, image_type=''):
-        if CONF.config_drive_format not in ['tgz', 'iso9660']:
-            msg = (_("Invalid config drive format %s") %
-                   CONF.config_drive_format)
-            raise exception.ZVMConfigDriveError(msg=msg)
-
-        LOG.debug('Using config drive', instance=instance)
-
-        extra_md = {}
-        if CONF.zvm_config_drive_inject_password:
-            extra_md['admin_pass'] = admin_password
-
-        udev_settle = ''
-        if image_type in ['xcatconf4z', 'volume-snapshot']:
-            udev_settle = linuxdist.get_znetconfig_contents()
-        if udev_settle:
-            if len(commands) == 0:
-                znetconfig = '\n'.join(('#!/bin/bash', udev_settle))
-            else:
-                znetconfig = '\n'.join(('#!/bin/bash', commands, udev_settle))
-            znetconfig += '\nrm -rf /tmp/znetconfig.sh\n'
-            # Create a temp file in instance to execute above commands
-            net_cmd_file = []
-            net_cmd_file.append(('/tmp/znetconfig.sh', znetconfig))  # nosec
-            injected_files.extend(net_cmd_file)
-            # injected_files.extend(('/tmp/znetconfig.sh', znetconfig))
-
-        inst_md = instance_metadata.InstanceMetadata(instance,
-                                                 content=injected_files,
-                                                 extra_md=extra_md,
-                                                 request_context=context)
-        # network_metadata will prevent the hostname of the instance from
-        # being set correctly, so clean the value
-        inst_md.network_metadata = None
-
-        configdrive_tgz = os.path.join(instance_path, 'cfgdrive.tgz')
-
-        LOG.debug('Creating config drive at %s' % configdrive_tgz,
-                  instance=instance)
-        with zvmconfigdrive.ZVMConfigDriveBuilder(instance_md=inst_md) as cdb:
-            cdb.make_drive(configdrive_tgz)
-
-        return configdrive_tgz
+                self.destroy(context, instance, network_info,
+                             block_device_info)
 
     def _preset_instance_network(self, instance_name, network_info):
-        self._networkop.config_xcat_mac(instance_name)
+        self.config_xcat_mac(instance_name)
         LOG.debug("Add ip/host name on xCAT MN for instance %s" %
-                    instance_name)
+                  instance_name)
         try:
             network = network_info[0]['network']
             ip_addr = network['subnets'][0]['ips'][0]['address']
@@ -482,74 +300,25 @@ class ZVMDriver(driver.ComputeDriver):
                 msg = _("Network info is Empty")
             raise exception.ZVMNetworkError(msg=msg)
 
-        self._networkop.add_xcat_host(instance_name, ip_addr, instance_name)
-        self._networkop.makehosts()
+        self.add_xcat_host(instance_name, ip_addr, instance_name)
+        self.makehosts()
 
-    def _import_image_to_nova(self, context, instance, image_meta):
-        image_file_name = image_meta['properties']['image_file_name']
-        disk_file = ''.join(j for j in image_file_name.split(".img")[0]
-                            if j.isalnum()) + ".img"
-        tmp_file_fn = self._pathutils.make_time_stamp()
-        bundle_file_path = self._pathutils.get_bundle_tmp_path(tmp_file_fn)
-        image_file_path = self._pathutils.get_img_path(
-                                            bundle_file_path, disk_file)
-
-        LOG.debug("Downloading the image %s from glance to nova compute "
-                    "server" % image_meta['id'], instance=instance)
-        self._zvm_images.fetch_image(context,
-                                     image_meta['id'],
-                                     image_file_path,
-                                     instance['user_id'],
-                                     instance['project_id'])
-        return (tmp_file_fn, image_file_path, bundle_file_path)
-
-    def _import_image_to_xcat(self, context, instance, image_meta, tmp_f_fn):
-        # Format the image name and image disk file in case user named them
-        # with special characters
-        image_name = ''.join(i for i in image_meta['name'] if i.isalnum())
-        spawn_path = self._pathutils.get_spawn_folder()
-        image_file_name = image_meta['properties']['image_file_name']
-        disk_file = ''.join(j for j in image_file_name.split(".img")[0]
-                           if j.isalnum()) + ".img"
-        if tmp_f_fn is None:
-            tmp_f_fn = self._pathutils.make_time_stamp()
-            bundle_file_path = self._pathutils.get_bundle_tmp_path(tmp_f_fn)
-            image_file_path = self._pathutils.get_img_path(
-                bundle_file_path, disk_file)
-            LOG.debug("Downloading the image %s from glance to nova compute "
-                    "server" % image_meta['id'], instance=instance)
-            self._zvm_images.fetch_image(context,
-                                     image_meta['id'],
-                                     image_file_path,
-                                     instance['user_id'],
-                                     instance['project_id'])
-        else:
-            bundle_file_path = self._pathutils.get_bundle_tmp_path(tmp_f_fn)
-            image_file_path = self._pathutils.get_img_path(
-                bundle_file_path, disk_file)
-
-        LOG.debug("Generating the manifest.xml as a part of bundle file for "
-                    "image %s" % image_meta['id'], instance=instance)
-        image_name = image_name.encode('unicode_escape')
-        image_name = image_name.replace('\u', '')
-        image_name = image_name.decode('utf-8')
-        self._zvm_images.generate_manifest_file(image_meta, image_name,
-                                                 disk_file, bundle_file_path)
-
-        LOG.debug("Generating bundle file for image %s" % image_meta['id'],
-                  instance=instance)
-        image_bundle_package = self._zvm_images.generate_image_bundle(
-                                    spawn_path, tmp_f_fn, image_name)
-
-        LOG.debug("Importing the image %s to xCAT" % image_meta['id'],
-                  instance=instance)
-        profile_str = image_name, instance['image_ref'].replace('-', '_')
-        image_profile = '_'.join(profile_str)
-        self._zvm_images.check_space_imgimport_xcat(context, instance,
-            image_bundle_package, CONF.xcat_free_space_threshold,
-            CONF.zvm_xcat_master)
-        self._zvm_images.put_image_to_xcat(image_bundle_package,
-                                           image_profile)
+    def _add_nic_to_table(self, inst_name, network_info):
+        nic_vdev = CONF.zvm_default_nic_vdev
+        # TODO(nafei) how to handle zhcpnode, as parameter?
+        zhcpnode = self._get_hcp_info()['nodename']
+        for vif in network_info:
+            LOG.debug('Create xcat table value about nic: '
+                      'ID is %(id)s, address is %(address)s, '
+                      'vdev is %(vdev)s' %
+                      {'id': vif['id'], 'address': vif['address'],
+                       'vdev': nic_vdev})
+            self.create_xcat_table_about_nic(zhcpnode,
+                                             inst_name,
+                                             vif['id'],
+                                             vif['address'],
+                                             nic_vdev)
+            nic_vdev = str(hex(int(nic_vdev, 16) + 3))[2:]
 
     @property
     def need_legacy_block_device_info(self):
@@ -1693,22 +1462,6 @@ class ZVMDriver(driver.ComputeDriver):
             connection_info = bd['connection_info']
             mountpoint = bd['mount_device']
             self.attach_volume(context, connection_info, instance, mountpoint)
-
-    def _add_nic_to_table(self, inst_name, network_info):
-        nic_vdev = CONF.zvm_default_nic_vdev
-        zhcpnode = self._get_hcp_info()['nodename']
-        for vif in network_info:
-            LOG.debug('Create xcat table value about nic: '
-                       'ID is %(id)s, address is %(address)s, '
-                        'vdev is %(vdev)s' %
-                        {'id': vif['id'], 'address': vif['address'],
-                         'vdev': nic_vdev})
-            self._networkop.create_xcat_table_about_nic(zhcpnode,
-                                         inst_name,
-                                         vif['id'],
-                                         vif['address'],
-                                         nic_vdev)
-            nic_vdev = str(hex(int(nic_vdev, 16) + 3))[2:]
 
     def _deploy_root_and_ephemeral(self, instance, image_name_xcat):
 

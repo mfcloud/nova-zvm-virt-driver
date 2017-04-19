@@ -28,21 +28,27 @@ from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
 
+from nova.api.metadata import base as instance_metadata
 from nova import block_device
 from nova.compute import power_state
 from nova import exception as nova_exception
 from nova.i18n import _, _LE, _LI, _LW
+from nova.virt import configdrive
 from nova.virt import driver
+from nova.virt import images
+from nova.virt.zvm import configdrive as zvmconfigdrive
 from nova.virt.zvm import const
-from nova.virt.zvm import dist
 from nova.virt.zvm import exception
+from zvmsdk import api as zvm_api
+from zvmsdk import dist
 
 
 LOG = logging.getLogger(__name__)
-
 CONF = cfg.CONF
-CONF.import_opt('instances_path', 'nova.compute.manager')
 
+CONF.import_opt('host', 'nova.conf')
+CONF.import_opt('instances_path', 'nova.compute.manager')
+CONF.import_opt('my_ip', 'nova.conf')
 
 _XCAT_URL = None
 
@@ -698,216 +704,9 @@ def punch_file(node, fn, fclass, remote_host=None, del_src=True):
             os.remove(fn)
 
 
-def punch_adminpass_file(instance_path, instance_name, admin_password,
-                         linuxdist):
-    adminpass_fn = ''.join([instance_path, '/adminpwd.sh'])
-    _generate_adminpass_file(adminpass_fn, admin_password, linuxdist)
-    punch_file(instance_name, adminpass_fn, 'X', remote_host=get_host())
-
-
-def punch_xcat_auth_file(instance_path, instance_name):
-    """Make xCAT MN authorized by virtual machines."""
-    mn_pub_key = get_mn_pub_key()
-    auth_fn = ''.join([instance_path, '/xcatauth.sh'])
-    _generate_auth_file(auth_fn, mn_pub_key)
-    punch_file(instance_name, auth_fn, 'X', remote_host=get_host())
-
-
-def _generate_iucv_cmd_file(iucv_cmd_file_path, cmd):
-    lines = ['#!/bin/bash\n', cmd]
-    with open(iucv_cmd_file_path, 'w') as f:
-        f.writelines(lines)
-
-
-def add_iucv_in_zvm_table(instance_name):
-    result = xcat_cmd_gettab('zvm', 'node', instance_name, "status")
-    if not result:
-        status = "IUCV=1"
-    else:
-        status = result + ';IUCV=1'
-    xcat_cmd_settab('zvm', 'node', instance_name, "status", status)
-
-
 def copy_zvm_table_status(des_inst_name, src_inst_name):
     status = xcat_cmd_gettab('zvm', 'node', src_inst_name, "status")
     xcat_cmd_settab('zvm', 'node', des_inst_name, "status", status)
-
-
-def punch_iucv_file(os_ver, zhcp, zhcp_userid, instance_name,
-                    instance_path):
-    """put iucv server and service files to reader."""
-    xcat_iucv_path = '/opt/zhcp/bin/IUCV'
-    # generate iucvserver file
-    iucv_server_fn = ''.join([xcat_iucv_path, '/iucvserv'])
-    iucv_server_path = '/usr/bin/iucvserv'
-    punch_path = '/var/opt/xcat/transport'
-    # generate iucvserver service and script file
-    iucv_service_path = ''
-    start_iucv_service_sh = ''
-    (distro, release) = dist.ListDistManager().parse_dist(os_ver)
-    if((distro == "rhel" and release < '7') or (
-                 distro == "sles" and release < '12')):
-        iucv_serverd_fn = ''.join([xcat_iucv_path, '/iucvserd'])
-        iucv_service_name = 'iucvserd'
-        iucv_service_path = '/etc/init.d/' + iucv_service_name
-        start_iucv_service_sh = 'chkconfig --add iucvserd 2>&1\n'
-        start_iucv_service_sh += 'service iucvserd  start 2>&1\n'
-    else:
-        iucv_serverd_fn = ''.join([xcat_iucv_path, '/iucvserd.service'])
-        iucv_service_name = 'iucvserd.service'
-        start_iucv_service_sh = 'systemctl enable iucvserd 2>&1\n'
-        start_iucv_service_sh += 'systemctl start iucvserd 2>&1\n'
-        if((distro == "rhel" and release >= '7') or (distro == "ubuntu")):
-            iucv_service_path = '/lib/systemd/system/' + iucv_service_name
-        if(distro == "sles" and release >= '12'):
-            iucv_service_path = '/usr/lib/systemd/system/' + iucv_service_name
-
-    iucv_cmd_file_path = instance_path + '/iucvexec.sh'
-    cmd = '\n'.join((
-        # if when execute this script, conf4z hasn't received iucv file.
-        "spoolid=`vmur li | awk '/iucvserv/{print \$2}'|tail -1`",
-        "vmur re -f $spoolid /usr/bin/iucvserv 2>&1 >/var/log/messages",
-        "spoolid=`vmur li | awk '/iucvserd/{print \$2}'|tail -1`",
-        "vmur re -f $spoolid %s  2>&1 >/var/log/messages" % iucv_service_path,
-        # if conf4z has received iucv files first.
-        "cp -rf %s/iucvserv %s 2>&1 >/var/log/messages" % (punch_path,
-                                                           iucv_server_path),
-        "cp -rf %s/%s %s 2>&1 >/var/log/messages" % (punch_path,
-                                        iucv_service_name, iucv_service_path),
-        "chmod +x %s %s" % (iucv_server_path, iucv_service_path),
-        "echo -n %s >/etc/iucv_authorized_userid 2>&1" % zhcp_userid,
-        start_iucv_service_sh
-        ))
-    _generate_iucv_cmd_file(iucv_cmd_file_path, cmd)
-    punch_file(instance_name, iucv_server_fn, 'X',
-                                   remote_host=zhcp, del_src=False)
-    punch_file(instance_name, iucv_serverd_fn, 'X',
-                                   remote_host=zhcp, del_src=False)
-    punch_file(instance_name, iucv_cmd_file_path, 'X', remote_host=get_host(),
-                                                     del_src=False)
-    # set VM's communicate type is IUCV
-    add_iucv_in_zvm_table(instance_name)
-
-
-def punch_iucv_authorized_file(old_inst_name, new_inst_name, zhcp_userid):
-    cmd = "echo -n %s >/etc/iucv_authorized_userid 2>&1" % zhcp_userid
-    iucv_cmd_file_path = '/tmp/%s.sh' % new_inst_name[-8:]
-    _generate_iucv_cmd_file(iucv_cmd_file_path, cmd)
-    punch_file(new_inst_name, iucv_cmd_file_path, 'X', remote_host=get_host())
-    if old_inst_name != new_inst_name:
-        # set VM's communicate type the same as original VM
-        copy_zvm_table_status(old_inst_name, new_inst_name)
-
-
-def process_eph_disk(instance_name, vdev=None, fmt=None, mntdir=None):
-    if not fmt:
-        fmt = CONF.default_ephemeral_format or const.DEFAULT_EPH_DISK_FMT
-    vdev = vdev or CONF.zvm_user_adde_vdev
-    mntdir = mntdir or CONF.zvm_default_ephemeral_mntdir
-
-    eph_parms = _generate_eph_parmline(vdev, fmt, mntdir)
-    aemod_handler(instance_name, const.DISK_FUNC_NAME, eph_parms)
-
-
-def aemod_handler(instance_name, func_name, parms):
-    url = get_xcat_url().chvm('/' + instance_name)
-    body = [" ".join(['--aemod', func_name, parms])]
-
-    try:
-        xcat_request("PUT", url, body)
-    except Exception as err:
-        emsg = format_exception_msg(err)
-        with excutils.save_and_reraise_exception():
-            LOG.error(_LE('Invoke AE method function: %(func)s on %(node)s '
-                          'failed with reason: %(msg)s') %
-                     {'func': func_name, 'node': instance_name, 'msg': emsg})
-
-
-def punch_configdrive_file(transportfiles, instance_name):
-    punch_file(instance_name, transportfiles, 'X', remote_host=get_host())
-
-
-def punch_zipl_file(instance_path, instance_name, lun, wwpn, fcp, volume_meta):
-    zipl_fn = ''.join([instance_path, '/ziplset.sh'])
-    _generate_zipl_file(zipl_fn, lun, wwpn, fcp, volume_meta)
-    punch_file(instance_name, zipl_fn, 'X', remote_host=get_host())
-
-
-def generate_vdev(base, offset=1):
-    """Generate virtual device number base on base vdev.
-
-    :param base: base virtual device number, string of 4 bit hex.
-    :param offset: offset to base, integer.
-
-    :output: virtual device number, string of 4 bit hex.
-    """
-    vdev = hex(int(base, 16) + offset)[2:]
-    return vdev.rjust(4, '0')
-
-
-def generate_eph_vdev(offset=1):
-    """Generate virtual device number for ephemeral disks.
-
-    :parm offset: offset to zvm_user_adde_vdev.
-
-    :output: virtual device number, string of 4 bit hex.
-    """
-    vdev = generate_vdev(CONF.zvm_user_adde_vdev, offset + 1)
-    if offset >= 0 and offset < 254:
-        return vdev
-    else:
-        msg = _("Invalid virtual device number for ephemeral disk: %s") % vdev
-        LOG.error(msg)
-        raise exception.ZVMDriverError(msg=msg)
-
-
-def _generate_eph_parmline(vdev, fmt, mntdir):
-
-    parms = [
-        'action=addMdisk',
-        'vaddr=' + vdev,
-        'filesys=' + fmt,
-        'mntdir=' + mntdir
-        ]
-    parmline = ' '.join(parms)
-    return parmline
-
-
-def _generate_auth_file(fn, pub_key):
-    lines = ['#!/bin/bash\n',
-    'echo "%s" >> /root/.ssh/authorized_keys' % pub_key]
-    with open(fn, 'w') as f:
-        f.writelines(lines)
-
-
-def _generate_adminpass_file(fn, admin_password, linuxdist):
-    pwd_str = linuxdist.get_change_passwd_command(admin_password)
-    lines = ['#!/bin/bash\n', pwd_str]
-    with open(fn, 'w') as f:
-        f.writelines(lines)
-
-
-def _generate_zipl_file(fn, lun, wwpn, fcp, volume_meta):
-    image = volume_meta['image']
-    ramdisk = volume_meta['ramdisk']
-    root = volume_meta['root']
-    os_version = volume_meta['os_version']
-    dist_manager = dist.ListDistManager()
-    linux_dist = dist_manager.get_linux_dist(os_version)()
-    zipl_script_lines = linux_dist.get_zipl_script_lines(
-                            image, ramdisk, root, fcp, wwpn, lun)
-    with open(fn, 'w') as f:
-        f.writelines(zipl_script_lines)
-
-
-@wrap_invalid_xcat_resp_data_error
-def get_mn_pub_key():
-    cmd = 'cat /root/.ssh/id_rsa.pub'
-    resp = xdsh(CONF.zvm_xcat_master, cmd)
-    key = resp['data'][0][0]
-    start_idx = key.find('ssh-rsa')
-    key = key[start_idx:]
-    return key
 
 
 def parse_os_version(os_version):
@@ -916,7 +715,7 @@ def parse_os_version(os_version):
     ('rhel', x.y) and ('sles', x.y) where x.y may not be digits
     """
     supported = {'rhel': ['rhel', 'redhat', 'red hat'],
-                'sles': ['suse', 'sles']}
+                 'sles': ['suse', 'sles']}
     os_version = os_version.lower()
     for distro, patterns in supported.items():
         for i in patterns:
@@ -942,8 +741,8 @@ def xcat_cmd_gettab(table, col, col_value, attr):
 def xcat_cmd_settab(table, col, col_value, attr, value):
     """Add status value for node in database table."""
     commands = ("%(col)s=%(col_value)s %(table)s.%(attr)s=%(value)s" %
-              {'col': col, 'col_value': col_value,
-                         'attr': attr, 'table': table, 'value': value})
+                {'col': col, 'col_value': col_value,
+                 'attr': attr, 'table': table, 'value': value})
     url = get_xcat_url().tabch("/%s" % table)
     body = [commands]
     with expect_invalid_xcat_resp_data():
@@ -1024,18 +823,6 @@ class PathUtils(object):
             os.makedirs(image_tmp_path)
         return image_tmp_path
 
-    def get_bundle_tmp_path(self, tmp_file_fn):
-        bundle_tmp_path = os.path.join(self._get_image_tmp_path(), "spawn_tmp",
-                                       tmp_file_fn)
-        if not os.path.exists(bundle_tmp_path):
-            LOG.debug('Creating folder %s for image bundle temp file' %
-                      bundle_tmp_path)
-            os.makedirs(bundle_tmp_path)
-        return bundle_tmp_path
-
-    def get_img_path(self, bundle_file_path, image_name):
-        return os.path.join(bundle_file_path, image_name)
-
     def _get_snapshot_path(self):
         snapshot_folder = os.path.join(self._get_image_tmp_path(),
                                        "snapshot_tmp")
@@ -1050,18 +837,6 @@ class PathUtils(object):
             LOG.debug("Creating the punch folder %s" % punch_folder)
             os.makedirs(punch_folder)
         return punch_folder
-
-    def get_spawn_folder(self):
-        spawn_folder = os.path.join(self._get_image_tmp_path(), "spawn_tmp")
-        if not os.path.exists(spawn_folder):
-            LOG.debug("Creating the spawn folder %s" % spawn_folder)
-            os.makedirs(spawn_folder)
-        return spawn_folder
-
-    def make_time_stamp(self):
-        tmp_file_fn = time.strftime('%Y%m%d%H%M%S',
-                                            time.localtime(time.time()))
-        return tmp_file_fn
 
     def get_snapshot_time_path(self):
         snapshot_time_path = os.path.join(self._get_snapshot_path(),
@@ -1080,9 +855,9 @@ class PathUtils(object):
     def _get_instances_path(self):
         return os.path.normpath(CONF.instances_path)
 
-    def get_instance_path(self, os_node, instance_name):
-        instance_folder = os.path.join(self._get_instances_path(), os_node,
-                                       instance_name)
+    def get_instance_path(self, os_node, instance_uuid):
+        instance_folder = os.path.join(self._get_instances_path(),
+                                       instance_uuid)
         if not os.path.exists(instance_folder):
             LOG.debug("Creating the instance path %s" % instance_folder)
             os.makedirs(instance_folder)
@@ -1227,3 +1002,105 @@ class NetworkUtils(object):
         mask = str(len(bin_str.rstrip('0')))
         cidr_v4 = ip + '/' + mask
         return cidr_v4
+
+
+class VMUtils(object):
+    def __init__(self):
+        self._sdk_api = zvm_api.SDKAPI()
+        self._dist_manager = dist.ListDistManager()
+        self._pathutils = self.PathUtils()
+        self._imageutils = self.ImageUtils()
+
+    # Prepare and create configdrive for instance
+    def generate_configdrive(self, context, instance, os_version,
+                             network_info, injected_files, admin_password,
+                             linuxdist):
+                # Create network configuration files
+        LOG.debug('Creating network configuration files '
+                  'for instance: %s' % instance['name'], instance=instance)
+        base_nic_vdev = CONF.zvm_default_nic_vdev
+
+        linuxdist = self._dist_manager.get_linux_dist(os_version)()
+        instance_path = self._pathutils.get_instance_path(instance['uuid'])
+
+        files_and_cmds = linuxdist.create_network_configuration_files(
+                             instance_path, network_info, base_nic_vdev)
+        (net_conf_files, net_conf_cmds) = files_and_cmds
+        # Add network configure files to inject_files
+        if len(net_conf_files) > 0:
+            injected_files.extend(net_conf_files)
+
+        # Create configure drive
+        if not CONF.zvm_config_drive_inject_password:
+            admin_password = CONF.zvm_image_default_password
+        transportfiles = None
+        if configdrive.required_by(instance):
+            transportfiles = self._create_config_drive(context, instance_path,
+                                                       instance,
+                                                       injected_files,
+                                                       admin_password,
+                                                       net_conf_cmds,
+                                                       linuxdist)
+        return transportfiles
+
+    def _create_config_drive(self, context, instance_path, instance,
+                             injected_files, admin_password, commands,
+                             linuxdist):
+        if CONF.config_drive_format not in ['tgz', 'iso9660']:
+            msg = (_("Invalid config drive format %s") %
+                   CONF.config_drive_format)
+            raise exception.ZVMConfigDriveError(msg=msg)
+
+        LOG.debug('Using config drive', instance=instance)
+
+        extra_md = {}
+        if CONF.zvm_config_drive_inject_password:
+            extra_md['admin_pass'] = admin_password
+
+        udev_settle = linuxdist.get_znetconfig_contents()
+        if udev_settle:
+            if len(commands) == 0:
+                znetconfig = '\n'.join(('#!/bin/bash', udev_settle))
+            else:
+                znetconfig = '\n'.join(('#!/bin/bash', commands, udev_settle))
+            znetconfig += '\nrm -rf /tmp/znetconfig.sh\n'
+            # Create a temp file in instance to execute above commands
+            net_cmd_file = []
+            net_cmd_file.append(('/tmp/znetconfig.sh', znetconfig))  # nosec
+            injected_files.extend(net_cmd_file)
+            # injected_files.extend(('/tmp/znetconfig.sh', znetconfig))
+
+        inst_md = instance_metadata.InstanceMetadata(instance,
+                                                     content=injected_files,
+                                                     extra_md=extra_md,
+                                                     request_context=context)
+        # network_metadata will prevent the hostname of the instance from
+        # being set correctly, so clean the value
+        inst_md.network_metadata = None
+
+        configdrive_tgz = os.path.join(instance_path, 'cfgdrive.tgz')
+
+        LOG.debug('Creating config drive at %s' % configdrive_tgz,
+                  instance=instance)
+        with zvmconfigdrive.ZVMConfigDriveBuilder(instance_md=inst_md) as cdb:
+            cdb.make_drive(configdrive_tgz)
+
+        return configdrive_tgz
+
+
+class ImageUtils(object):
+
+    def __init__(self):
+        self._pathutils = self.PathUtils()
+        self._sdk_api = zvm_api.SDKAPI()
+
+    def prepare_spawn_image(self, context, image_href,
+                            image_os_version):
+        LOG.debug("Downloading the image %s from glance to nova compute "
+                  "server" % image_href)
+
+        image_path = os.path.join(os.path.normpath(CONF.zvm_image_tmp_path,
+                                                   image_href))
+        if not os.path.exists(image_path):
+            images.fetch_image(context, image_href, image_path)
+        self._sdk_api.import_spawn_image(image_path, image_os_version)
