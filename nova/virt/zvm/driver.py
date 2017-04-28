@@ -20,15 +20,16 @@ import time
 from oslo_log import log as logging
 from oslo_utils import excutils
 
+from nova.compute import vm_mode
 from nova.i18n import _, _LI, _LW
 from nova.image import api as image_api
 from nova.objects import migrate_data as migrate_data_obj
 from nova.virt import driver
 from nova.virt.zvm import conf
+from nova.virt.zvm import const
 from nova.virt.zvm import exception
-from nova.virt.zvm import instance as zvminstance
 from nova.virt.zvm import utils as zvmutils
-from zvmsdk import api as zvm_api
+from zvmsdk import api as sdkapi
 
 
 LOG = logging.getLogger(__name__)
@@ -36,7 +37,6 @@ LOG = logging.getLogger(__name__)
 CONF = conf.CONF
 CONF.import_opt('host', 'nova.conf')
 CONF.import_opt('my_ip', 'nova.conf')
-ZVMInstance = zvminstance.ZVMInstance
 
 
 class ZVMDriver(driver.ComputeDriver):
@@ -51,14 +51,13 @@ class ZVMDriver(driver.ComputeDriver):
 
     def __init__(self, virtapi):
         super(ZVMDriver, self).__init__(virtapi)
-        self._sdk_api = zvm_api.SDKAPI()
+        self._sdk_api = sdkapi.SDKAPI()
         self._vmutils = zvmutils.VMUtils()
 
         self._image_api = image_api.API()
         self._pathutils = zvmutils.PathUtils()
         self._imageutils = zvmutils.ImageUtils()
         self._networkutils = zvmutils.NetworkUtils()
-        self._vmutils = zvmutils.VMUtils()
         self._imageop_semaphore = eventlet.semaphore.Semaphore(1)
 
         # incremental sleep interval list
@@ -313,7 +312,38 @@ class ZVMDriver(driver.ComputeDriver):
         return
 
     def update_host_status(self):
-        pass
+        """Refresh host stats. One compute service entry possibly
+        manages several hypervisors, so will return a list of host
+        status information.
+        """
+        LOG.debug("Updating host status for %s" % CONF.host)
+
+        caps = []
+
+        info = self._sdk_api.get_host_info()
+
+        data = {'host': CONF.host,
+                'allowed_vm_type': const.ALLOWED_VM_TYPE}
+        data['vcpus'] = info['vcpus']
+        data['vcpus_used'] = info['vcpus_used']
+        data['cpu_info'] = info['cpu_info']
+        data['disk_total'] = info['disk_total']
+        data['disk_used'] = info['disk_used']
+        data['disk_available'] = info['disk_available']
+        data['host_memory_total'] = info['memory_mb']
+        data['host_memory_free'] = (info['memory_mb'] -
+                                    info['memory_mb_used'])
+        data['hypervisor_type'] = info['hypervisor_type']
+        data['hypervisor_version'] = info['hypervisor_version']
+        data['hypervisor_hostname'] = info['hypervisor_hostname']
+        data['supported_instances'] = [(const.ARCHITECTURE,
+                                        const.HYPERVISOR_TYPE,
+                                        vm_mode.HVM)]
+        data['ipl_time'] = info['ipl_time']
+
+        caps.append(data)
+
+        return caps
 
     def get_volume_connector(self, instance):
         pass

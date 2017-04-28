@@ -98,8 +98,8 @@ class VMUtils(object):
     def __init__(self):
         self._sdk_api = zvm_api.SDKAPI()
         self._dist_manager = dist.ListDistManager()
-        self._pathutils = self.PathUtils()
-        self._imageutils = self.ImageUtils()
+        self._pathutils = PathUtils()
+        self._imageutils = ImageUtils()
 
     # Prepare and create configdrive for instance
     def generate_configdrive(self, context, instance, os_version,
@@ -181,7 +181,7 @@ class VMUtils(object):
 class ImageUtils(object):
 
     def __init__(self):
-        self._pathutils = self.PathUtils()
+        self._pathutils = PathUtils()
         self._sdk_api = zvm_api.SDKAPI()
 
     def prepare_spawn_image(self, context, image_href,

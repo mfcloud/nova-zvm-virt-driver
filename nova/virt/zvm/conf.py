@@ -16,31 +16,6 @@ from oslo_config import cfg
 
 
 zvm_opts = [
-    cfg.StrOpt('zvm_diskpool',
-               default=None,
-               help="""
-zVM disk pool for ephemeral disks.
-
-The volume group name from your directory manager on your z/VM system,
-which will be used for ephemeral disks for new instances.
-A dollar sign ($) is not allowed in the name.
-
-Related:
-    zvm_diskpool_type
-"""),
-    cfg.StrOpt('zvm_host',
-               default=None,
-               help="""
-z/VM host that managed by the compute node.
-
-This is the name of the hypervisor that is managed by the compute service.
-Admin need to set this name by refering to the z/VM system configuration
-file.
-
-Possible values:
-    A 1-8 character string, matching the z/VM system name this
-    compute service is managing.
-"""),
     cfg.IntOpt('zvm_console_log_size',
                default=100,
                help="""
