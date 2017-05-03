@@ -95,3 +95,8 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         self.assertEqual(info[0]['host'], CONF.host)
         self.assertEqual(info[0]['hypervisor_hostname'], 'fakenode')
         self.assertEqual(info[0]['host_memory_free'], 765432)
+
+    @mock.patch.object(sdkapi.SDKAPI, 'list_vms')
+    def test_list_instances(self, list_vms):
+        self.driver.list_instances()
+        list_vms.assert_called_once_with()

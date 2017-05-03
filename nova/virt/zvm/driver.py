@@ -103,7 +103,7 @@ class ZVMDriver(driver.ComputeDriver):
         """Return the names of all the instances known to the virtualization
         layer, as a list.
         """
-        pass
+        return self._sdk_api.list_vms()
 
     def _instance_exists(self, instance_name):
         """Overwrite this to using instance name as input parameter."""
