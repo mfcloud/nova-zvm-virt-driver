@@ -20,16 +20,20 @@ import time
 from oslo_log import log as logging
 from oslo_utils import excutils
 
+from nova.compute import power_state
 from nova.compute import vm_mode
+from nova import exception as nova_exception
 from nova.i18n import _, _LI, _LW
 from nova.image import api as image_api
 from nova.objects import migrate_data as migrate_data_obj
 from nova.virt import driver
+from nova.virt import hardware
 from nova.virt.zvm import conf
 from nova.virt.zvm import const
 from nova.virt.zvm import exception
 from nova.virt.zvm import utils as zvmutils
 from zvmsdk import api as sdkapi
+from zvmsdk import exception as sdkexception
 
 
 LOG = logging.getLogger(__name__)
@@ -86,6 +90,26 @@ class ZVMDriver(driver.ComputeDriver):
         """
         pass
 
+    def _get_instance_info(self, instance):
+        inst_name = instance['name']
+        vm_info = self._sdk_api.get_vm_info(inst_name)
+        _instance_info = hardware.InstanceInfo()
+
+        power_stat = zvmutils.mapping_power_stat(vm_info['power_state'])
+        if ((power_stat == power_state.RUNNING) and
+            (instance['power_state'] == power_state.PAUSED)):
+            # return paused state only previous power state is paused
+            _instance_info.state = power_state.PAUSED
+        else:
+            _instance_info.state = power_stat
+
+        _instance_info.max_mem_kb = vm_info['max_mem_kb']
+        _instance_info.mem_kb = vm_info['mem_kb']
+        _instance_info.num_cpu = vm_info['num_cpu']
+        _instance_info.cpu_time_ns = vm_info['cpu_time_ns']
+
+        return _instance_info
+
     def get_info(self, instance):
         """Get the current status of an instance, by name (not ID!)
 
@@ -97,7 +121,19 @@ class ZVMDriver(driver.ComputeDriver):
         :cpu_time:        (int) the CPU time used in nanoseconds
 
         """
-        pass
+        inst_name = instance['name']
+
+        try:
+            return self._get_instance_info(instance)
+        except sdkexception.ZVMVirtualMachineNotExist:
+            LOG.warning(_LW("z/VM instance %s does not exist") % inst_name,
+                        instance=instance)
+            raise nova_exception.InstanceNotFound(instance_id=inst_name)
+        except Exception as err:
+            # TODO(YDY): raise nova_exception.InstanceNotFound
+            LOG.warning(_LW("Failed to get the info of z/VM instance %s") %
+                        inst_name, instance=instance)
+            raise err
 
     def list_instances(self):
         """Return the names of all the instances known to the virtualization
