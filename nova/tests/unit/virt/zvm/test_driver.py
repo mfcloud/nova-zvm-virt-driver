@@ -18,14 +18,19 @@
 import eventlet
 import mock
 
+from nova.compute import power_state
 from nova import context
+from nova import exception as nova_exception
 from nova.image import api as image_api
 from nova import test
+from nova.tests.unit import fake_instance
 from nova.virt import fake
+from nova.virt import hardware
 from nova.virt.zvm import conf
 from nova.virt.zvm import driver
 from nova.virt.zvm import utils as zvmutils
 from zvmsdk import api as sdkapi
+from zvmsdk import exception as sdkexception
 
 
 CONF = conf.CONF
@@ -100,3 +105,69 @@ class ZVMDriverTestCases(test.NoDBTestCase):
     def test_list_instances(self, list_vms):
         self.driver.list_instances()
         list_vms.assert_called_once_with()
+
+    @mock.patch.object(sdkapi.SDKAPI, 'get_vm_info')
+    @mock.patch.object(zvmutils, 'mapping_power_stat')
+    def test_get_instance_info_paused(self, mapping_power_stat, get_vm_info):
+        get_vm_info.return_value = {'power_state': 'on',
+                                    'max_mem_kb': 2097152,
+                                    'mem_kb': 44,
+                                    'num_cpu': 2,
+                                    'cpu_time_ns': 796000,
+                                    }
+        mapping_power_stat.return_value = power_state.RUNNING
+        fake_inst = fake_instance.fake_instance_obj(self.context,
+                    name='fake', power_state=power_state.PAUSED,
+                    memory_mb='1024',
+                    vcpus='4')
+        inst_info = self.driver._get_instance_info(fake_inst)
+        mapping_power_stat.assert_called_once_with('on')
+        self.assertEqual(inst_info.state, power_state.PAUSED)
+        self.assertEqual(inst_info.mem_kb, 44)
+
+    @mock.patch.object(sdkapi.SDKAPI, 'get_vm_info')
+    @mock.patch.object(zvmutils, 'mapping_power_stat')
+    def test_get_instance_info_off(self, mapping_power_stat, get_vm_info):
+        get_vm_info.return_value = {'power_state': 'off',
+                                    'max_mem_kb': 2097152,
+                                    'mem_kb': 44,
+                                    'num_cpu': 2,
+                                    'cpu_time_ns': 796000,
+                                    }
+        mapping_power_stat.return_value = power_state.SHUTDOWN
+        fake_inst = fake_instance.fake_instance_obj(self.context,
+                    name='fake', power_state=power_state.PAUSED,
+                    memory_mb='1024',
+                    vcpus='4')
+        inst_info = self.driver._get_instance_info(fake_inst)
+        mapping_power_stat.assert_called_once_with('off')
+        self.assertEqual(inst_info.state, power_state.SHUTDOWN)
+        self.assertEqual(inst_info.mem_kb, 44)
+
+    @mock.patch.object(driver.ZVMDriver, '_get_instance_info')
+    def test_get_info(self, _get_instance_info):
+        _fake_inst_info = hardware.InstanceInfo(state=0x01, mem_kb=131072,
+                            num_cpu=4, cpu_time_ns=330528353,
+                            max_mem_kb=1048576)
+        _get_instance_info.return_value = _fake_inst_info
+        fake_inst = fake_instance.fake_instance_obj(self.context,
+                    name='fake', power_state=power_state.RUNNING,
+                    memory_mb='1024',
+                    vcpus='4')
+        inst_info = self.driver.get_info(fake_inst)
+        self.assertEqual(0x01, inst_info.state)
+        self.assertEqual(131072, inst_info.mem_kb)
+        self.assertEqual(4, inst_info.num_cpu)
+        self.assertEqual(330528353, inst_info.cpu_time_ns)
+        self.assertEqual(1048576, inst_info.max_mem_kb)
+
+    @mock.patch.object(driver.ZVMDriver, '_get_instance_info')
+    def test_get_info_instance_not_exist_error(self, _get_instance_info):
+        _get_instance_info.side_effect = sdkexception.ZVMVirtualMachineNotExist
+        fake_inst = fake_instance.fake_instance_obj(self.context,
+                    name='fake', power_state=power_state.RUNNING,
+                    memory_mb='1024',
+                    vcpus='4')
+        self.assertRaises(nova_exception.InstanceNotFound,
+                          self.driver.get_info,
+                          fake_inst)
