@@ -199,3 +199,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         self.assertRaises(nova_exception.InstanceNotFound,
                           self.driver.get_info,
                           fake_inst)
+
+    def test_get_available_nodes(self):
+        nodes = self.driver.get_available_nodes()
+        self.assertEqual(nodes[0], 'fakenode')

@@ -446,4 +446,5 @@ class ZVMDriver(driver.ComputeDriver):
             return self._host_stats[0]['ipl_time']
 
     def get_available_nodes(self, refresh=False):
-        pass
+        return [d['hypervisor_hostname'] for d in self._host_stats
+                if (d.get('hypervisor_hostname') is not None)]
