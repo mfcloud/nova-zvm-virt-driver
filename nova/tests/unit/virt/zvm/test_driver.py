@@ -19,6 +19,7 @@ import eventlet
 import mock
 
 from nova.compute import power_state
+from nova.compute import vm_mode
 from nova import context
 from nova import exception as nova_exception
 from nova.image import api as image_api
@@ -27,6 +28,7 @@ from nova.tests.unit import fake_instance
 from nova.virt import fake
 from nova.virt import hardware
 from nova.virt.zvm import conf
+from nova.virt.zvm import const
 from nova.virt.zvm import driver
 from nova.virt.zvm import utils as zvmutils
 from zvmsdk import api as sdkapi
@@ -100,6 +102,32 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         self.assertEqual(info[0]['host'], CONF.host)
         self.assertEqual(info[0]['hypervisor_hostname'], 'fakenode')
         self.assertEqual(info[0]['host_memory_free'], 765432)
+
+    @mock.patch.object(driver.ZVMDriver, 'update_host_status')
+    def test_get_available_resource(self, update_host_status):
+        update_host_status.return_value = [{
+            'host': CONF.host,
+            'allowed_vm_type': const.ALLOWED_VM_TYPE,
+            'vcpus': 10,
+            'vcpus_used': 10,
+            'cpu_info': {'Architecture': 's390x', 'CEC model': '2097'},
+            'disk_total': 406105,
+            'disk_used': 367263,
+            'disk_available': 38842,
+            'host_memory_total': 876543,
+            'host_memory_free': 111111,
+            'hypervisor_type': 'zvm',
+            'hypervisor_version': '630',
+            'hypervisor_hostname': 'fakenode',
+            'supported_instances': [(const.ARCHITECTURE,
+                                     const.HYPERVISOR_TYPE,
+                                     vm_mode.HVM)],
+            'ipl_time': 'IPL at 03/13/14 21:43:12 EDT',
+            }]
+        res = self.driver.get_available_resource('fakenode')
+        self.assertEqual(res['vcpus'], 10)
+        self.assertEqual(res['memory_mb_used'], 765432)
+        self.assertEqual(res['disk_available_least'], 38842)
 
     @mock.patch.object(sdkapi.SDKAPI, 'list_vms')
     def test_list_instances(self, list_vms):

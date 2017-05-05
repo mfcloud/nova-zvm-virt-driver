@@ -18,6 +18,7 @@ import six
 import time
 
 from oslo_log import log as logging
+from oslo_serialization import jsonutils
 from oslo_utils import excutils
 
 from nova.compute import power_state
@@ -290,7 +291,39 @@ class ZVMDriver(driver.ComputeDriver):
         pass
 
     def get_available_resource(self, nodename=None):
-        pass
+        """Retrieve resource information.
+
+        This method is called when nova-compute launches, and
+        as part of a periodic task
+
+        :param nodename:
+            node which the caller want to get resources from
+            a driver that manages only one node can safely ignore this
+        :returns: Dictionary describing resources
+
+        """
+        LOG.debug("Getting available resource for %s" % CONF.host)
+        stats = self.update_host_status()[0]
+
+        mem_used = stats['host_memory_total'] - stats['host_memory_free']
+        supported_instances = stats['supported_instances']
+        dic = {
+            'vcpus': stats['vcpus'],
+            'memory_mb': stats['host_memory_total'],
+            'local_gb': stats['disk_total'],
+            'vcpus_used': stats['vcpus_used'],
+            'memory_mb_used': mem_used,
+            'local_gb_used': stats['disk_used'],
+            'hypervisor_type': stats['hypervisor_type'],
+            'hypervisor_version': stats['hypervisor_version'],
+            'hypervisor_hostname': stats['hypervisor_hostname'],
+            'cpu_info': jsonutils.dumps(stats['cpu_info']),
+            'disk_available_least': stats['disk_available'],
+            'supported_instances': supported_instances,
+            'numa_topology': None,
+        }
+
+        return dic
 
     def check_can_live_migrate_destination(self, ctxt, instance_ref,
                                            src_compute_info, dst_compute_info,
