@@ -76,7 +76,7 @@ class PathUtils(object):
     def _get_instances_path(self):
         return os.path.normpath(CONF.instances_path)
 
-    def get_instance_path(self, os_node, instance_uuid):
+    def get_instance_path(self, instance_uuid):
         instance_folder = os.path.join(self._get_instances_path(),
                                        instance_uuid)
         if not os.path.exists(instance_folder):
@@ -103,26 +103,21 @@ class VMUtils(object):
 
     # Prepare and create configdrive for instance
     def generate_configdrive(self, context, instance, os_version,
-                             network_info, injected_files, admin_password,
-                             linuxdist):
-                # Create network configuration files
+                             network_info, injected_files, admin_password):
+        # Create network configuration files
         LOG.debug('Creating network configuration files '
                   'for instance: %s' % instance['name'], instance=instance)
-        base_nic_vdev = CONF.zvm_default_nic_vdev
 
         linuxdist = self._dist_manager.get_linux_dist(os_version)()
         instance_path = self._pathutils.get_instance_path(instance['uuid'])
 
         files_and_cmds = linuxdist.create_network_configuration_files(
-                             instance_path, network_info, base_nic_vdev)
+                             instance_path, network_info)
         (net_conf_files, net_conf_cmds) = files_and_cmds
         # Add network configure files to inject_files
         if len(net_conf_files) > 0:
             injected_files.extend(net_conf_files)
 
-        # Create configure drive
-        if not CONF.zvm_config_drive_inject_password:
-            admin_password = CONF.zvm_image_default_password
         transportfiles = None
         if configdrive.required_by(instance):
             transportfiles = self._create_config_drive(context, instance_path,
@@ -144,7 +139,7 @@ class VMUtils(object):
         LOG.debug('Using config drive', instance=instance)
 
         extra_md = {}
-        if CONF.zvm_config_drive_inject_password:
+        if admin_password:
             extra_md['admin_pass'] = admin_password
 
         udev_settle = linuxdist.get_znetconfig_contents()
@@ -184,13 +179,13 @@ class ImageUtils(object):
         self._pathutils = PathUtils()
         self._sdk_api = zvm_api.SDKAPI()
 
-    def prepare_spawn_image(self, context, image_href,
+    def import_spawn_image(self, context, image_href,
                             image_os_version):
         LOG.debug("Downloading the image %s from glance to nova compute "
                   "server" % image_href)
 
-        image_path = os.path.join(os.path.normpath(CONF.zvm_image_tmp_path,
-                                                   image_href))
+        image_path = os.path.join(os.path.normpath(CONF.zvm_image_tmp_path),
+                                                   image_href)
         if not os.path.exists(image_path):
-            images.fetch_image(context, image_href, image_path)
+            images.fetch(context, image_href, image_path)
         self._sdk_api.import_spawn_image(image_path, image_os_version)

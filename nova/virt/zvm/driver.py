@@ -13,13 +13,16 @@
 #    under the License.
 
 
+import datetime
 import eventlet
 import six
 import time
 
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
+from oslo_service import loopingcall
 from oslo_utils import excutils
+from oslo_utils import timeutils
 
 from nova.compute import power_state
 from nova.compute import vm_mode
@@ -154,53 +157,53 @@ class ZVMDriver(driver.ComputeDriver):
               admin_password, network_info=None, block_device_info=None,
               flavor=None):
         try:
-            LOG.info(_LI("Spawning new instance %(node) on zVM hypervisor") %
+            LOG.info(_LI("Spawning new instance %s on zVM hypervisor") %
                      instance['name'], instance=instance)
             # Validate VM ID on zVM hypervisor
             self._sdk_api.validate_vm_id(instance['name'])
             spawn_start = time.time()
             image_meta = self._image_api.get(context, image_meta.id)
             os_version = image_meta['properties']['os_version']
-            linuxdist = self._dist_manager.get_linux_dist(os_version)()
 
             # TODO(YaLian) will remove network files from this
             transportfiles = self._vmutils.generate_configdrive(
                             context, instance, os_version, network_info,
-                            injected_files, admin_password, linuxdist)
+                            injected_files, admin_password)
 
             with self._imageop_semaphore:
                 spawn_image_exist = self._sdk_api.check_image_exist(
                                     image_meta['id'])
                 if not spawn_image_exist:
-                    self._imageutils.prepare_spawn_image(
+                    self._imageutils.import_spawn_image(
                         context, image_meta['id'], os_version)
 
             spawn_image_name = self._sdk_api.get_image_name(
                                     image_meta['id'])
             eph_disks = block_device_info.get('ephemerals', [])
+
             self._sdk_api.create_vm(instance['name'], instance['vcpus'],
                                     instance['memory_mb'],
+                                    spawn_image_name,
                                     instance['root_gb'],
-                                    eph_disks, spawn_image_name)
+                                    eph_disks=eph_disks)
 
             # Setup network for z/VM instance
-            self._preset_instance_network(instance['name'], network_info)
-            self._add_nic_to_table(instance['name'], network_info)
-
-            self._sdk_api.deploy_image_to_vm(spawn_image_name, transportfiles)
+            self._setup_network(instance['name'], network_info)
+            self._sdk_api.deploy_image_to_vm(instance['name'],
+                                             spawn_image_name,
+                                             transportfiles)
 
             # Handle ephemeral disk
             if instance['ephemeral_gb'] != 0:
                 eph_disks = block_device_info.get('ephemerals', [])
                 self._sdk_api.process_addtional_disks(eph_disks)
 
-                # TODO(YaLian): Move this to utils.py
-                self._wait_and_get_nic_direct(instance['name'], instance)
+            self._wait_network_ready(instance['name'], instance)
 
-                self._compute_api.power_on(instance['name'])
-                spawn_time = time.time() - spawn_start
-                LOG.info(_LI("Instance spawned succeeded in %s seconds") %
-                         spawn_time, instance=instance)
+            self._sdk_api.power_on(instance['name'])
+            spawn_time = time.time() - spawn_start
+            LOG.info(_LI("Instance spawned succeeded in %s seconds") %
+                     spawn_time, instance=instance)
         except Exception as err:
             with excutils.save_and_reraise_exception():
                 LOG.error(_("Deploy image to instance %(instance)s "
@@ -210,39 +213,57 @@ class ZVMDriver(driver.ComputeDriver):
                 self.destroy(context, instance, network_info,
                              block_device_info)
 
-    def _preset_instance_network(self, instance_name, network_info):
-        self.config_xcat_mac(instance_name)
-        LOG.debug("Add ip/host name on xCAT MN for instance %s" %
-                  instance_name)
-        try:
-            network = network_info[0]['network']
-            ip_addr = network['subnets'][0]['ips'][0]['address']
-        except Exception:
-            if network_info:
-                msg = _("Invalid network info: %s") % str(network_info)
-            else:
-                msg = _("Network info is Empty")
-            raise exception.ZVMNetworkError(msg=msg)
+    def _setup_network(self, vm_name, network_info):
+        network = network_info[0]['network']
+        ip_addr = network['subnets'][0]['ips'][0]['address']
+        self._sdk_api.preset_vm_network(vm_name, ip_addr)
 
-        self.add_xcat_host(instance_name, ip_addr, instance_name)
-        self.makehosts()
-
-    def _add_nic_to_table(self, inst_name, network_info):
-        nic_vdev = CONF.zvm_default_nic_vdev
-        # TODO(nafei) how to handle zhcpnode, as parameter?
-        zhcpnode = self._get_hcp_info()['nodename']
+        LOG.debug("Creating NICs for vm %s", vm_name)
+        nic_list = []
         for vif in network_info:
-            LOG.debug('Create xcat table value about nic: '
-                      'ID is %(id)s, address is %(address)s, '
-                      'vdev is %(vdev)s' %
-                      {'id': vif['id'], 'address': vif['address'],
-                       'vdev': nic_vdev})
-            self.create_xcat_table_about_nic(zhcpnode,
-                                             inst_name,
-                                             vif['id'],
-                                             vif['address'],
-                                             nic_vdev)
-            nic_vdev = str(hex(int(nic_vdev, 16) + 3))[2:]
+            nic_dic = {'nic_id': vif['id'],
+                       'mac_addr': vif['address']}
+            nic_list.append(nic_dic)
+        self._sdk_api.create_port(vm_name, nic_list)
+
+    def _wait_network_ready(self, inst_name, instance):
+        """Wait until neutron zvm-agent add all NICs to vm"""
+        def _wait_for_nics_add_in_vm(inst_name, expiration):
+            if (CONF.zvm_reachable_timeout and
+                    timeutils.utcnow() > expiration):
+                msg = _("NIC update check failed "
+                        "on instance:%s") % instance.uuid
+                raise exception.ZVMNetworkError(msg=msg)
+
+            try:
+                switch_dict = self._sdk_api.get_vm_nic_switch_info(inst_name)
+                if switch_dict and '' not in switch_dict.values():
+                    for key in switch_dict:
+                        if not self._sdk_api.check_nic_coupled(inst_name, key):
+                            return
+                else:
+                    # In this case, the nic switch info is not ready yet
+                    # need another loop to check until time out or find it
+                    return
+
+            except exception.ZVMBaseException as e:
+                # Ignore any zvm driver exceptions
+                LOG.info(_LI('encounter error %s during get vswitch info'),
+                         e.format_message(), instance=instance)
+                return
+
+            # Enter here means all NIC granted
+            LOG.info(_LI("All NICs are added in user direct for "
+                         "instance %s."), inst_name, instance=instance)
+            raise loopingcall.LoopingCallDone()
+
+        expiration = timeutils.utcnow() + datetime.timedelta(
+                             seconds=CONF.zvm_reachable_timeout)
+        LOG.info(_LI("Wait neturon-zvm-agent to add NICs to %s user direct."),
+                 inst_name, instance=instance)
+        timer = loopingcall.FixedIntervalLoopingCall(
+                    _wait_for_nics_add_in_vm, inst_name, expiration)
+        timer.start(interval=10).wait()
 
     @property
     def need_legacy_block_device_info(self):

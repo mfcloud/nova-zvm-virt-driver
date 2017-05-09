@@ -22,16 +22,24 @@ from nova.compute import power_state
 from nova.compute import vm_mode
 from nova import context
 from nova import exception as nova_exception
-from nova.image import api as image_api
+from nova import objects
 from nova import test
+
+from nova.image import api as image_api
+from nova.network import model as network_model
 from nova.tests.unit import fake_instance
+
+from nova.tests import uuidsentinel
 from nova.virt import fake
 from nova.virt import hardware
 from nova.virt.zvm import conf
 from nova.virt.zvm import const
 from nova.virt.zvm import driver
+
 from nova.virt.zvm import utils as zvmutils
+
 from zvmsdk import api as sdkapi
+from zvmsdk import dist
 from zvmsdk import exception as sdkexception
 
 
@@ -46,9 +54,10 @@ class ZVMDriverTestCases(test.NoDBTestCase):
     @mock.patch.object(driver.ZVMDriver, 'update_host_status')
     def setUp(self, update_host_status):
         super(ZVMDriverTestCases, self).setUp()
-        self.context = context.get_admin_context()
+
         self.flags(host='fakehost',
-                   my_ip='10.1.1.10')
+                   my_ip='10.1.1.10',
+                   instance_name_template = 'test%04x')
         update_host_status.return_value = [{
             'host': 'fakehost',
             'allowed_vm_type': 'zLinux',
@@ -67,6 +76,80 @@ class ZVMDriverTestCases(test.NoDBTestCase):
             'ipl_time': 'IPL at 03/13/14 21:43:12 EDT',
         }]
         self.driver = driver.ZVMDriver(fake.FakeVirtAPI())
+        self._context = context.RequestContext('fake_user', 'fake_project')
+        self._uuid = uuidsentinel.foo
+        self._image_id = uuidsentinel.foo
+        self._instance_values = {
+            'display_name': 'test',
+            'uuid': self._uuid,
+            'vcpus': 1,
+            'memory_mb': 1024,
+            'image_ref': self._image_id,
+            'root_gb': 3,
+        }
+        self._instance = fake_instance.fake_instance_obj(
+                                self._context, **self._instance_values)
+        self._flavor = objects.Flavor(name='testflavor', memory_mb=512,
+                                      vcpus=1, root_gb=3, ephemeral_gb=10,
+                                      swap=0, extra_specs={})
+        self._instance.flavor = self._flavor
+        self._image_meta = objects.ImageMeta.from_dict({'id': self._image_id})
+
+        eph_disks = [{'guest_format': u'ext3',
+                      'device_name': u'/dev/sdb',
+                      'disk_bus': None,
+                      'device_type': None,
+                      'size': 1},
+                     {'guest_format': u'ext4',
+                      'device_name': u'/dev/sdc',
+                      'disk_bus': None,
+                      'device_type': None,
+                      'size': 1}]
+        self._block_device_info = {'swap': None,
+                                   'root_device_name': u'/dev/sda',
+                                   'ephemerals': eph_disks,
+                                   'block_device_mapping': []}
+
+        self._fake_image_meta = {'status': 'active',
+                                 'properties': {'os_version': 'rhel7.2'},
+                                 'name': 'rhel72eckdimage',
+                                 'deleted': False,
+                                 'container_format': 'bare',
+                                 'disk_format': 'raw',
+                                 'id': self._image_id,
+                                 'owner': 'cfc26f9d6af948018621ab00a1675310',
+                                 'checksum': 'b026cd083ef8e9610a29eaf71459cc',
+                                 'min_disk': 0,
+                                 'is_public': False,
+                                 'deleted_at': None,
+                                 'min_ram': 0,
+                                 'size': 465448142}
+        subnet_4 = network_model.Subnet(cidr='192.168.0.1/24',
+                                        dns=[network_model.IP('192.168.0.1')],
+                                        gateway=
+                                            network_model.IP('192.168.0.1'),
+                                        ips=[
+                                            network_model.IP('192.168.0.100')],
+                                        routes=None)
+        network = network_model.Network(id=0,
+                                        bridge='fa0',
+                                        label='fake',
+                                        subnets=[subnet_4],
+                                        vlan=None,
+                                        bridge_interface=None,
+                                        injected=True)
+        self._network_values = {
+            'id': None,
+            'address': 'DE:AD:BE:EF:00:00',
+            'network': network,
+            'type': network_model.VIF_TYPE_OVS,
+            'devname': None,
+            'ovs_interfaceid': None,
+            'rxtx_cap': 3
+        }
+        self._network_info = network_model.NetworkInfo([
+                network_model.VIF(**self._network_values)
+        ])
 
     def test_init_driver(self):
         self.assertIsInstance(self.driver._sdk_api, sdkapi.SDKAPI)
@@ -144,7 +227,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
                                     'cpu_time_ns': 796000,
                                     }
         mapping_power_stat.return_value = power_state.RUNNING
-        fake_inst = fake_instance.fake_instance_obj(self.context,
+        fake_inst = fake_instance.fake_instance_obj(self._context,
                     name='fake', power_state=power_state.PAUSED,
                     memory_mb='1024',
                     vcpus='4')
@@ -163,7 +246,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
                                     'cpu_time_ns': 796000,
                                     }
         mapping_power_stat.return_value = power_state.SHUTDOWN
-        fake_inst = fake_instance.fake_instance_obj(self.context,
+        fake_inst = fake_instance.fake_instance_obj(self._context,
                     name='fake', power_state=power_state.PAUSED,
                     memory_mb='1024',
                     vcpus='4')
@@ -178,7 +261,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
                             num_cpu=4, cpu_time_ns=330528353,
                             max_mem_kb=1048576)
         _get_instance_info.return_value = _fake_inst_info
-        fake_inst = fake_instance.fake_instance_obj(self.context,
+        fake_inst = fake_instance.fake_instance_obj(self._context,
                     name='fake', power_state=power_state.RUNNING,
                     memory_mb='1024',
                     vcpus='4')
@@ -192,7 +275,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
     @mock.patch.object(driver.ZVMDriver, '_get_instance_info')
     def test_get_info_instance_not_exist_error(self, _get_instance_info):
         _get_instance_info.side_effect = sdkexception.ZVMVirtualMachineNotExist
-        fake_inst = fake_instance.fake_instance_obj(self.context,
+        fake_inst = fake_instance.fake_instance_obj(self._context,
                     name='fake', power_state=power_state.RUNNING,
                     memory_mb='1024',
                     vcpus='4')
@@ -203,3 +286,49 @@ class ZVMDriverTestCases(test.NoDBTestCase):
     def test_get_available_nodes(self):
         nodes = self.driver.get_available_nodes()
         self.assertEqual(nodes[0], 'fakenode')
+
+    @mock.patch.object(sdkapi.SDKAPI, 'power_on')
+    @mock.patch.object(driver.ZVMDriver, '_wait_network_ready')
+    @mock.patch.object(sdkapi.SDKAPI, 'deploy_image_to_vm')
+    @mock.patch.object(driver.ZVMDriver, '_setup_network')
+    @mock.patch.object(sdkapi.SDKAPI, 'create_vm')
+    @mock.patch.object(sdkapi.SDKAPI, 'get_image_name')
+    @mock.patch.object(sdkapi.SDKAPI, 'check_image_exist')
+    @mock.patch.object(zvmutils.VMUtils, 'generate_configdrive')
+    @mock.patch.object(dist.ListDistManager, 'get_linux_dist')
+    @mock.patch.object(image_api.API, 'get')
+    @mock.patch.object(sdkapi.SDKAPI, 'validate_vm_id')
+    def test_spawn(self, validate_vm_id, mock_get_image_meta, mock_linux_dist,
+                   generate_configdrive, check_image_exist, get_image_name,
+                   create_vm, setup_network, deploy_image_to_vm,
+                   wait_network_ready, power_on):
+        mock_get_image_meta.return_value = self._fake_image_meta
+        generate_configdrive.return_value = '/tmp/fakecfg.tgz'
+        check_image_exist.return_value = True
+        get_image_name.return_value = "rhel7.2-s390x-netboot"\
+            "-0a0c576a_157f_42c8_bde5_2a254d8b77fc"
+        eph_disks = []
+        self._block_device_info['ephemerals'] = eph_disks
+
+        self.driver.spawn(self._context, self._instance, self._image_meta,
+                          injected_files=None,
+                          admin_password=None,
+                          network_info=self._network_info,
+                          block_device_info=self._block_device_info,
+                          flavor=self._flavor)
+        validate_vm_id.assert_called_once_with('test0001')
+        mock_get_image_meta.assert_called_once_with(self._context,
+                                                    self._image_meta.id)
+        generate_configdrive.assert_called_once_with(self._context,
+            self._instance, 'rhel7.2', self._network_info, None, None)
+        check_image_exist.assert_called_once_with(self._image_meta.id)
+        get_image_name.assert_called_once_with(self._image_meta.id)
+        create_vm.assert_called_once_with('test0001', 1, 1024,
+            "rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc", 3,
+             eph_disks=[])
+        setup_network.assert_called_once_with('test0001', self._network_info)
+        deploy_image_to_vm.assert_called_once_with('test0001',
+            "rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc",
+            '/tmp/fakecfg.tgz')
+        wait_network_ready.assert_called_once_with('test0001', self._instance)
+        power_on.assert_called_once_with('test0001')
