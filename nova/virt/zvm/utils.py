@@ -188,4 +188,4 @@ class ImageUtils(object):
                                                    image_href)
         if not os.path.exists(image_path):
             images.fetch(context, image_href, image_path)
-        self._sdk_api.import_spawn_image(image_path, image_os_version)
+        self._sdk_api.import_image(image_path, image_os_version)

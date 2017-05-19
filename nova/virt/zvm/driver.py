@@ -43,6 +43,7 @@ from zvmsdk import exception as sdkexception
 LOG = logging.getLogger(__name__)
 
 CONF = conf.CONF
+CONF.import_opt('default_ephemeral_format', 'nova.conf')
 CONF.import_opt('host', 'nova.conf')
 CONF.import_opt('my_ip', 'nova.conf')
 
@@ -156,11 +157,16 @@ class ZVMDriver(driver.ComputeDriver):
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None,
               flavor=None):
+        LOG.info(_LI("Spawning new instance %s on zVM hypervisor") %
+                 instance['name'], instance=instance)
+        # For zVM instance, limit the maximum length of instance name to \ 8
+        if len(instance['name']) > 8:
+            msg = (_("Don't support spawn vm on zVM hypervisor with instance "
+                "name: %s, please change your instance_name_template to make "
+                "sure the length of instance name is not longer than 8 "
+                "characters") % instance['name'])
+            raise nova_exception.InvalidInput(reason=msg)
         try:
-            LOG.info(_LI("Spawning new instance %s on zVM hypervisor") %
-                     instance['name'], instance=instance)
-            # Validate VM ID on zVM hypervisor
-            self._sdk_api.validate_vm_id(instance['name'])
             spawn_start = time.time()
             image_meta = self._image_api.get(context, image_meta.id)
             os_version = image_meta['properties']['os_version']
@@ -171,21 +177,35 @@ class ZVMDriver(driver.ComputeDriver):
                             injected_files, admin_password)
 
             with self._imageop_semaphore:
-                spawn_image_exist = self._sdk_api.check_image_exist(
+                spawn_image_exist = self._sdk_api.image_query(
                                     image_meta['id'])
                 if not spawn_image_exist:
                     self._imageutils.import_spawn_image(
                         context, image_meta['id'], os_version)
 
-            spawn_image_name = self._sdk_api.get_image_name(
+            spawn_image_name = self._sdk_api.image_query(
                                     image_meta['id'])
-            eph_disks = block_device_info.get('ephemerals', [])
+
+            if instance['root_gb'] == 0:
+                root_disk_size = self._sdk_api.get_image_root_disk_size(
+                                                spawn_image_name)
+            else:
+                root_disk_size = '%ig' % instance['root_gb']
+
+            eph_list = []
+            ephemeral_disks_info = block_device_info.get('ephemerals', [])
+            for eph in ephemeral_disks_info:
+                eph_dict = {'size': eph['size'],
+                            'format': (eph['guest_format'] or
+                                       CONF.default_ephemeral_format)}
+                eph_list.append(eph_dict)
 
             self._sdk_api.create_vm(instance['name'], instance['vcpus'],
                                     instance['memory_mb'],
-                                    spawn_image_name,
-                                    instance['root_gb'],
-                                    eph_disks=eph_disks)
+                                    root_disk_size)
+
+            if eph_list:
+                self._sdk_api.add_mdisks(instance['name'], eph_list)
 
             # Setup network for z/VM instance
             self._setup_network(instance['name'], network_info)
@@ -193,10 +213,10 @@ class ZVMDriver(driver.ComputeDriver):
                                              spawn_image_name,
                                              transportfiles)
 
-            # Handle ephemeral disk
-            if instance['ephemeral_gb'] != 0:
-                eph_disks = block_device_info.get('ephemerals', [])
-                self._sdk_api.process_addtional_disks(eph_disks)
+            # Handle ephemeral disks
+            if eph_list:
+                self._sdk_api.process_addtional_disks(instance['name'],
+                                                      eph_list)
 
             self._wait_network_ready(instance['name'], instance)
 
@@ -221,9 +241,9 @@ class ZVMDriver(driver.ComputeDriver):
         LOG.debug("Creating NICs for vm %s", vm_name)
         nic_list = []
         for vif in network_info:
-            nic_dic = {'nic_id': vif['id'],
-                       'mac_addr': vif['address']}
-            nic_list.append(nic_dic)
+            nic_dict = {'nic_id': vif['id'],
+                        'mac_addr': vif['address']}
+            nic_list.append(nic_dict)
         self._sdk_api.create_port(vm_name, nic_list)
 
     def _wait_network_ready(self, inst_name, instance):

@@ -292,20 +292,17 @@ class ZVMDriverTestCases(test.NoDBTestCase):
     @mock.patch.object(sdkapi.SDKAPI, 'deploy_image_to_vm')
     @mock.patch.object(driver.ZVMDriver, '_setup_network')
     @mock.patch.object(sdkapi.SDKAPI, 'create_vm')
-    @mock.patch.object(sdkapi.SDKAPI, 'get_image_name')
-    @mock.patch.object(sdkapi.SDKAPI, 'check_image_exist')
+    @mock.patch.object(sdkapi.SDKAPI, 'image_query')
     @mock.patch.object(zvmutils.VMUtils, 'generate_configdrive')
     @mock.patch.object(dist.ListDistManager, 'get_linux_dist')
     @mock.patch.object(image_api.API, 'get')
-    @mock.patch.object(sdkapi.SDKAPI, 'validate_vm_id')
-    def test_spawn(self, validate_vm_id, mock_get_image_meta, mock_linux_dist,
-                   generate_configdrive, check_image_exist, get_image_name,
+    def test_spawn(self, mock_get_image_meta, mock_linux_dist,
+                   generate_configdrive, image_query,
                    create_vm, setup_network, deploy_image_to_vm,
                    wait_network_ready, power_on):
         mock_get_image_meta.return_value = self._fake_image_meta
         generate_configdrive.return_value = '/tmp/fakecfg.tgz'
-        check_image_exist.return_value = True
-        get_image_name.return_value = "rhel7.2-s390x-netboot"\
+        image_query.return_value = "rhel7.2-s390x-netboot"\
             "-0a0c576a_157f_42c8_bde5_2a254d8b77fc"
         eph_disks = []
         self._block_device_info['ephemerals'] = eph_disks
@@ -316,16 +313,12 @@ class ZVMDriverTestCases(test.NoDBTestCase):
                           network_info=self._network_info,
                           block_device_info=self._block_device_info,
                           flavor=self._flavor)
-        validate_vm_id.assert_called_once_with('test0001')
         mock_get_image_meta.assert_called_once_with(self._context,
                                                     self._image_meta.id)
         generate_configdrive.assert_called_once_with(self._context,
             self._instance, 'rhel7.2', self._network_info, None, None)
-        check_image_exist.assert_called_once_with(self._image_meta.id)
-        get_image_name.assert_called_once_with(self._image_meta.id)
-        create_vm.assert_called_once_with('test0001', 1, 1024,
-            "rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc", 3,
-             eph_disks=[])
+        image_query.assert_called_with(self._image_meta.id)
+        create_vm.assert_called_once_with('test0001', 1, 1024, '3g')
         setup_network.assert_called_once_with('test0001', self._network_info)
         deploy_image_to_vm.assert_called_once_with('test0001',
             "rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc",
