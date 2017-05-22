@@ -164,9 +164,9 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         self.assertEqual(self.driver._host_stats[0]['host'], "fakehost")
         self.assertEqual(self.driver._host_stats[0]['disk_available'], 38842)
 
-    @mock.patch.object(sdkapi.SDKAPI, 'get_host_info')
-    def test_update_host_status(self, get_host_info):
-        get_host_info.return_value = {
+    @mock.patch.object(sdkapi.SDKAPI, 'host_get_info')
+    def test_update_host_status(self, host_get_info):
+        host_get_info.return_value = {
             'vcpus': 10,
             'vcpus_used': 10,
             'cpu_info': {'Architecture': 's390x', 'CEC model': '2097'},
@@ -181,7 +181,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
             'ipl_time': 'IPL at 03/13/14 21:43:12 EDT',
             }
         info = self.driver.update_host_status()
-        get_host_info.assert_called_with()
+        host_get_info.assert_called_with()
         self.assertEqual(info[0]['host'], CONF.host)
         self.assertEqual(info[0]['hypervisor_hostname'], 'fakenode')
         self.assertEqual(info[0]['host_memory_free'], 765432)
@@ -212,15 +212,16 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         self.assertEqual(res['memory_mb_used'], 765432)
         self.assertEqual(res['disk_available_least'], 38842)
 
-    @mock.patch.object(sdkapi.SDKAPI, 'list_vms')
-    def test_list_instances(self, list_vms):
+    @mock.patch.object(sdkapi.SDKAPI, 'host_list_guests')
+    def test_list_instances(self, host_list_guests):
         self.driver.list_instances()
-        list_vms.assert_called_once_with()
+        host_list_guests.assert_called_once_with()
 
-    @mock.patch.object(sdkapi.SDKAPI, 'get_vm_info')
+    @mock.patch.object(sdkapi.SDKAPI, 'guest_get_info')
     @mock.patch.object(zvmutils, 'mapping_power_stat')
-    def test_get_instance_info_paused(self, mapping_power_stat, get_vm_info):
-        get_vm_info.return_value = {'power_state': 'on',
+    def test_get_instance_info_paused(self, mapping_power_stat,
+                                      guest_get_info):
+        guest_get_info.return_value = {'power_state': 'on',
                                     'max_mem_kb': 2097152,
                                     'mem_kb': 44,
                                     'num_cpu': 2,
@@ -236,10 +237,10 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         self.assertEqual(inst_info.state, power_state.PAUSED)
         self.assertEqual(inst_info.mem_kb, 44)
 
-    @mock.patch.object(sdkapi.SDKAPI, 'get_vm_info')
+    @mock.patch.object(sdkapi.SDKAPI, 'guest_get_info')
     @mock.patch.object(zvmutils, 'mapping_power_stat')
-    def test_get_instance_info_off(self, mapping_power_stat, get_vm_info):
-        get_vm_info.return_value = {'power_state': 'off',
+    def test_get_instance_info_off(self, mapping_power_stat, guest_get_info):
+        guest_get_info.return_value = {'power_state': 'off',
                                     'max_mem_kb': 2097152,
                                     'mem_kb': 44,
                                     'num_cpu': 2,

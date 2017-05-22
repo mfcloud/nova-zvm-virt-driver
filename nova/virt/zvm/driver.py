@@ -97,7 +97,7 @@ class ZVMDriver(driver.ComputeDriver):
 
     def _get_instance_info(self, instance):
         inst_name = instance['name']
-        vm_info = self._sdk_api.get_vm_info(inst_name)
+        vm_info = self._sdk_api.guest_get_info(inst_name)
         _instance_info = hardware.InstanceInfo()
 
         power_stat = zvmutils.mapping_power_stat(vm_info['power_state'])
@@ -144,7 +144,7 @@ class ZVMDriver(driver.ComputeDriver):
         """Return the names of all the instances known to the virtualization
         layer, as a list.
         """
-        return self._sdk_api.list_vms()
+        return self._sdk_api.host_list_guests()
 
     def _instance_exists(self, instance_name):
         """Overwrite this to using instance name as input parameter."""
@@ -430,7 +430,7 @@ class ZVMDriver(driver.ComputeDriver):
 
         caps = []
 
-        info = self._sdk_api.get_host_info()
+        info = self._sdk_api.host_get_info()
 
         data = {'host': CONF.host,
                 'allowed_vm_type': const.ALLOWED_VM_TYPE}
