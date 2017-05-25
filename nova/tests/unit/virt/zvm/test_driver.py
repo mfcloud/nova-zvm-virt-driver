@@ -288,6 +288,11 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         nodes = self.driver.get_available_nodes()
         self.assertEqual(nodes[0], 'fakenode')
 
+    @mock.patch.object(sdkapi.SDKAPI, 'guest_get_console_output')
+    def test_get_console_output(self, gco):
+        self.driver.get_console_output({}, self._instance)
+        gco.assert_called_with('test0001')
+
 #     @mock.patch.object(sdkapi.SDKAPI, 'power_on')
 #     @mock.patch.object(driver.ZVMDriver, '_wait_network_ready')
 #     @mock.patch.object(sdkapi.SDKAPI, 'deploy_image_to_vm')

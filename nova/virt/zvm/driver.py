@@ -480,7 +480,7 @@ class ZVMDriver(driver.ComputeDriver):
         pass
 
     def get_console_output(self, context, instance):
-        pass
+        return self._sdk_api.guest_get_console_output(instance.name)
 
     def get_host_uptime(self):
         with zvmutils.expect_invalid_xcat_resp_data(self._host_stats):
