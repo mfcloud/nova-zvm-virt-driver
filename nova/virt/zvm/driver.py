@@ -291,7 +291,24 @@ class ZVMDriver(driver.ComputeDriver):
 
     def destroy(self, context, instance, network_info=None,
                 block_device_info=None, destroy_disks=False):
-        pass
+
+        inst_name = instance['name']
+        if self._instance_exists(inst_name):
+            LOG.info(_LI("Destroying instance %s"), inst_name,
+                     instance=instance)
+
+            if network_info:
+                try:
+                    self._sdk_api.guest_clean_network_resource(inst_name)
+                except Exception:
+                    LOG.warning(_LW("Clean MAC and VSWITCH failed while "
+                                "destroying z/VM instance %s"), inst_name,
+                                instance=instance)
+
+            self._sdk_api.guest_delete(inst_name)
+        else:
+            LOG.warning(_LW('Instance %s does not exist'), inst_name,
+                        instance=instance)
 
     def manage_image_cache(self, context, filtered_instances):
         """Clean the image cache in xCAT MN."""
