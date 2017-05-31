@@ -332,3 +332,15 @@ class ZVMDriverTestCases(test.NoDBTestCase):
 #         wait_network_ready.assert_called_once_with('test0001',
 #                                                    self._instance)
 #         power_on.assert_called_once_with('test0001')
+
+    @mock.patch.object(driver.ZVMDriver, '_instance_exists')
+    @mock.patch.object(sdkapi.SDKAPI, 'guest_delete')
+    @mock.patch.object(sdkapi.SDKAPI, 'guest_clean_network_resource')
+    def test_destroy(self, guest_clean_network_resource, guest_delete,
+                     instance_exists):
+        instance_exists.return_value = True
+        self.driver.destroy(self._context, self._instance,
+                            network_info=self._network_info)
+        guest_clean_network_resource.assert_called_once_with(
+                                            self._instance['name'])
+        guest_delete.assert_called_once_with(self._instance['name'])
