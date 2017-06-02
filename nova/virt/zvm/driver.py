@@ -192,20 +192,23 @@ class ZVMDriver(driver.ComputeDriver):
             else:
                 root_disk_size = '%ig' % instance['root_gb']
 
-            eph_list = []
+            disk_list = []
+            root_disk = {'size': root_disk_size,
+                         'is_boot_disk': True
+                         }
+            disk_list.append(root_disk)
             ephemeral_disks_info = block_device_info.get('ephemerals', [])
+            eph_list = []
             for eph in ephemeral_disks_info:
                 eph_dict = {'size': eph['size'],
                             'format': (eph['guest_format'] or
                                        CONF.default_ephemeral_format)}
                 eph_list.append(eph_dict)
 
-            self._sdk_api.create_vm(instance['name'], instance['vcpus'],
-                                    instance['memory_mb'],
-                                    root_disk_size)
-
             if eph_list:
-                self._sdk_api.add_mdisks(instance['name'], eph_list)
+                disk_list.extend(eph_list)
+            self._sdk_api.guest_create(instance['name'], instance['vcpus'],
+                                       instance['memory_mb'], disk_list)
 
             # Setup network for z/VM instance
             self._setup_network(instance['name'], network_info)
@@ -296,15 +299,6 @@ class ZVMDriver(driver.ComputeDriver):
         if self._instance_exists(inst_name):
             LOG.info(_LI("Destroying instance %s"), inst_name,
                      instance=instance)
-
-            if network_info:
-                try:
-                    self._sdk_api.guest_clean_network_resource(inst_name)
-                except Exception:
-                    LOG.warning(_LW("Clean MAC and VSWITCH failed while "
-                                "destroying z/VM instance %s"), inst_name,
-                                instance=instance)
-
             self._sdk_api.guest_delete(inst_name)
         else:
             LOG.warning(_LW('Instance %s does not exist'), inst_name,
