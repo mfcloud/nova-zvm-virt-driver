@@ -44,7 +44,7 @@ class ZVMConfigDriveBuilder(configdrive.ConfigDriveBuilder):
         :raises ProcessExecuteError if a helper process has failed.
 
         """
-        if CONF.config_drive_format in ['tgz', 'iso9660']:
+        if CONF.config_drive_format in ['iso9660']:
             self._make_tgz(path)
         else:
             raise exception.ConfigDriveUnknownFormat(
