@@ -258,10 +258,13 @@ class ZVMDriver(driver.ComputeDriver):
                 raise exception.ZVMNetworkError(msg=msg)
 
             try:
-                switch_dict = self._sdk_api.get_vm_nic_switch_info(inst_name)
+                switch_dict = self._sdk_api.guest_get_nic_switch_info(
+                                                inst_name)
                 if switch_dict and '' not in switch_dict.values():
                     for key in switch_dict:
-                        if not self._sdk_api.check_nic_coupled(inst_name, key):
+                        result = self._sdk_api.guest_get_definition_info(
+                                                inst_name, nic_coupled=key)
+                        if not result['nic_coupled']:
                             return
                 else:
                     # In this case, the nic switch info is not ready yet
