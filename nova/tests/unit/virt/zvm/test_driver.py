@@ -225,7 +225,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
                                     'max_mem_kb': 2097152,
                                     'mem_kb': 44,
                                     'num_cpu': 2,
-                                    'cpu_time_ns': 796000,
+                                    'cpu_time_us': 796000,
                                     }
         mapping_power_stat.return_value = power_state.RUNNING
         fake_inst = fake_instance.fake_instance_obj(self._context,
@@ -244,7 +244,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
                                     'max_mem_kb': 2097152,
                                     'mem_kb': 44,
                                     'num_cpu': 2,
-                                    'cpu_time_ns': 796000,
+                                    'cpu_time_us': 796000,
                                     }
         mapping_power_stat.return_value = power_state.SHUTDOWN
         fake_inst = fake_instance.fake_instance_obj(self._context,

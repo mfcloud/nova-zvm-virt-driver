@@ -111,7 +111,7 @@ class ZVMDriver(driver.ComputeDriver):
         _instance_info.max_mem_kb = vm_info['max_mem_kb']
         _instance_info.mem_kb = vm_info['mem_kb']
         _instance_info.num_cpu = vm_info['num_cpu']
-        _instance_info.cpu_time_ns = vm_info['cpu_time_ns']
+        _instance_info.cpu_time_ns = vm_info['cpu_time_us'] * 1000
 
         return _instance_info
 
