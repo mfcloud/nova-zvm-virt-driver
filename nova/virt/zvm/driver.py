@@ -211,9 +211,8 @@ class ZVMDriver(driver.ComputeDriver):
 
             # Setup network for z/VM instance
             self._setup_network(instance['name'], network_info)
-            self._sdk_api.deploy_image_to_vm(instance['name'],
-                                             spawn_image_name,
-                                             transportfiles)
+            self._sdk_api.guest_deploy(instance['name'], spawn_image_name,
+                                       transportfiles)
 
             # Handle ephemeral disks
             if eph_list:
@@ -222,7 +221,7 @@ class ZVMDriver(driver.ComputeDriver):
 
             self._wait_network_ready(instance['name'], instance)
 
-            self._sdk_api.power_on(instance['name'])
+            self._sdk_api.guest_start(instance['name'])
             spawn_time = time.time() - spawn_start
             LOG.info(_LI("Instance spawned succeeded in %s seconds") %
                      spawn_time, instance=instance)
