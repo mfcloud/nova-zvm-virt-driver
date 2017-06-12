@@ -179,8 +179,7 @@ class ImageUtils(object):
         self._pathutils = PathUtils()
         self._sdk_api = zvm_api.SDKAPI()
 
-    def import_spawn_image(self, context, image_href,
-                            image_os_version):
+    def import_spawn_image(self, context, image_href, image_os_version):
         LOG.debug("Downloading the image %s from glance to nova compute "
                   "server" % image_href)
 
@@ -188,4 +187,4 @@ class ImageUtils(object):
                                                    image_href)
         if not os.path.exists(image_path):
             images.fetch(context, image_href, image_path)
-        self._sdk_api.import_image(image_path, image_os_version)
+        self._sdk_api.image_import(image_path, image_os_version)

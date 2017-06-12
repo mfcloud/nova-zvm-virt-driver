@@ -184,10 +184,9 @@ class ZVMDriver(driver.ComputeDriver):
                         context, image_meta['id'], os_version)
 
             spawn_image_name = self._sdk_api.image_query(
-                                    image_meta['id'])
-
+                                    image_meta['id'])[0]
             if instance['root_gb'] == 0:
-                root_disk_size = self._sdk_api.get_image_root_disk_size(
+                root_disk_size = self._sdk_api.image_get_root_disk_size(
                                                 spawn_image_name)
             else:
                 root_disk_size = '%ig' % instance['root_gb']
