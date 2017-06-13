@@ -19,6 +19,7 @@ from nova.compute import power_state
 HYPERVISOR_TYPE = 'zvm'
 ARCHITECTURE = 's390x'
 ALLOWED_VM_TYPE = 'zLinux'
+DEFAULT_EPH_DISK_FMT = 'ext3'
 
 ZVM_POWER_STAT = {
     'on': power_state.RUNNING,

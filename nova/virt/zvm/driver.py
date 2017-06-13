@@ -199,9 +199,10 @@ class ZVMDriver(driver.ComputeDriver):
             ephemeral_disks_info = block_device_info.get('ephemerals', [])
             eph_list = []
             for eph in ephemeral_disks_info:
-                eph_dict = {'size': eph['size'],
+                eph_dict = {'size': '%ig' % eph['size'],
                             'format': (eph['guest_format'] or
-                                       CONF.default_ephemeral_format)}
+                                       CONF.default_ephemeral_format or
+                                       const.DEFAULT_EPH_DISK_FMT)}
                 eph_list.append(eph_dict)
 
             if eph_list:
@@ -216,8 +217,8 @@ class ZVMDriver(driver.ComputeDriver):
 
             # Handle ephemeral disks
             if eph_list:
-                self._sdk_api.process_addtional_disks(instance['name'],
-                                                      eph_list)
+                self._sdk_api.guest_config_minidisks(instance['name'],
+                                                     eph_list)
 
             self._wait_network_ready(instance['name'], instance)
 
