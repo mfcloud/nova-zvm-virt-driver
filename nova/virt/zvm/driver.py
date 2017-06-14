@@ -168,23 +168,22 @@ class ZVMDriver(driver.ComputeDriver):
             raise nova_exception.InvalidInput(reason=msg)
         try:
             spawn_start = time.time()
-            image_meta = self._image_api.get(context, image_meta.id)
-            os_version = image_meta['properties']['os_version']
+            os_distro = image_meta.properties.os_distro
 
             # TODO(YaLian) will remove network files from this
             transportfiles = self._vmutils.generate_configdrive(
-                            context, instance, os_version, network_info,
+                            context, instance, os_distro, network_info,
                             injected_files, admin_password)
 
             with self._imageop_semaphore:
                 spawn_image_exist = self._sdk_api.image_query(
-                                    image_meta['id'])
+                                    image_meta.id)
                 if not spawn_image_exist:
                     self._imageutils.import_spawn_image(
-                        context, image_meta['id'], os_version)
+                        context, image_meta.id, os_distro)
 
             spawn_image_name = self._sdk_api.image_query(
-                                    image_meta['id'])[0]
+                                    image_meta.id)[0]
             if instance['root_gb'] == 0:
                 root_disk_size = self._sdk_api.image_get_root_disk_size(
                                                 spawn_image_name)
