@@ -39,7 +39,7 @@ from nova.virt.zvm import driver
 from nova.virt.zvm import utils as zvmutils
 
 from zvmsdk import api as sdkapi
-# from zvmsdk import dist
+from zvmsdk import dist
 from zvmsdk import exception as sdkexception
 
 
@@ -93,7 +93,6 @@ class ZVMDriverTestCases(test.NoDBTestCase):
                                       vcpus=1, root_gb=3, ephemeral_gb=10,
                                       swap=0, extra_specs={})
         self._instance.flavor = self._flavor
-        self._image_meta = objects.ImageMeta.from_dict({'id': self._image_id})
 
         eph_disks = [{'guest_format': u'ext3',
                       'device_name': u'/dev/sdb',
@@ -104,14 +103,14 @@ class ZVMDriverTestCases(test.NoDBTestCase):
                       'device_name': u'/dev/sdc',
                       'disk_bus': None,
                       'device_type': None,
-                      'size': 1}]
+                      'size': 2}]
         self._block_device_info = {'swap': None,
                                    'root_device_name': u'/dev/sda',
                                    'ephemerals': eph_disks,
                                    'block_device_mapping': []}
 
-        self._fake_image_meta = {'status': 'active',
-                                 'properties': {'os_version': 'rhel7.2'},
+        fake_image_meta = {'status': 'active',
+                                 'properties': {'os_distro': 'rhel7.2'},
                                  'name': 'rhel72eckdimage',
                                  'deleted': False,
                                  'container_format': 'bare',
@@ -124,6 +123,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
                                  'deleted_at': None,
                                  'min_ram': 0,
                                  'size': 465448142}
+        self._image_meta = objects.ImageMeta.from_dict(fake_image_meta)
         subnet_4 = network_model.Subnet(cidr='192.168.0.1/24',
                                         dns=[network_model.IP('192.168.0.1')],
                                         gateway=
@@ -293,45 +293,96 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         self.driver.get_console_output({}, self._instance)
         gco.assert_called_with('test0001')
 
-#     @mock.patch.object(sdkapi.SDKAPI, 'power_on')
-#     @mock.patch.object(driver.ZVMDriver, '_wait_network_ready')
-#     @mock.patch.object(sdkapi.SDKAPI, 'deploy_image_to_vm')
-#     @mock.patch.object(driver.ZVMDriver, '_setup_network')
-#     @mock.patch.object(sdkapi.SDKAPI, 'create_vm')
-#     @mock.patch.object(sdkapi.SDKAPI, 'image_query')
-#     @mock.patch.object(zvmutils.VMUtils, 'generate_configdrive')
-#     @mock.patch.object(dist.ListDistManager, 'get_linux_dist')
-#     @mock.patch.object(image_api.API, 'get')
-#     def test_spawn(self, mock_get_image_meta, mock_linux_dist,
-#                    generate_configdrive, image_query,
-#                    create_vm, setup_network, deploy_image_to_vm,
-#                    wait_network_ready, power_on):
-#         mock_get_image_meta.return_value = self._fake_image_meta
-#         generate_configdrive.return_value = '/tmp/fakecfg.tgz'
-#         image_query.return_value = "rhel7.2-s390x-netboot"\
-#             "-0a0c576a_157f_42c8_bde5_2a254d8b77fc"
-#         eph_disks = []
-#         self._block_device_info['ephemerals'] = eph_disks
-#
-#         self.driver.spawn(self._context, self._instance, self._image_meta,
-#                           injected_files=None,
-#                           admin_password=None,
-#                           network_info=self._network_info,
-#                           block_device_info=self._block_device_info,
-#                           flavor=self._flavor)
-#         mock_get_image_meta.assert_called_once_with(self._context,
-#                                                     self._image_meta.id)
-#         generate_configdrive.assert_called_once_with(self._context,
-#             self._instance, 'rhel7.2', self._network_info, None, None)
-#         image_query.assert_called_with(self._image_meta.id)
-#         create_vm.assert_called_once_with('test0001', 1, 1024, '3g')
-#         setup_network.assert_called_once_with('test0001', self._network_info)
-#         deploy_image_to_vm.assert_called_once_with('test0001',
-#             "rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc",
-#             '/tmp/fakecfg.tgz')
-#         wait_network_ready.assert_called_once_with('test0001',
-#                                                    self._instance)
-#         power_on.assert_called_once_with('test0001')
+    @mock.patch.object(sdkapi.SDKAPI, 'guest_start')
+    @mock.patch.object(driver.ZVMDriver, '_wait_network_ready')
+    @mock.patch.object(sdkapi.SDKAPI, 'guest_config_minidisks')
+    @mock.patch.object(sdkapi.SDKAPI, 'guest_deploy')
+    @mock.patch.object(driver.ZVMDriver, '_setup_network')
+    @mock.patch.object(sdkapi.SDKAPI, 'guest_create')
+    @mock.patch.object(zvmutils.ImageUtils, 'import_spawn_image')
+    @mock.patch.object(sdkapi.SDKAPI, 'image_query')
+    @mock.patch.object(zvmutils.VMUtils, 'generate_configdrive')
+    @mock.patch.object(dist.LinuxDistManager, 'get_linux_dist')
+    def _test_spawn(self, mock_linux_dist,
+                    generate_configdrive, image_query, import_spawn_image,
+                    guest_create, setup_network, guest_deploy,
+                    guest_config_minidisks, wait_network_ready,
+                    guest_start, image_query_result, eph_disks):
+        generate_configdrive.return_value = '/tmp/fakecfg.tgz'
+        image_query.side_effect = image_query_result
+
+        self._block_device_info['ephemerals'] = eph_disks
+        root_disk = {'size': '3g', 'is_boot_disk': True}
+        disk_list = [root_disk]
+        eph_list = []
+        for eph in eph_disks:
+            eph_dict = {'size': '%ig' % eph['size'],
+                        'format': (eph['guest_format'] or
+                                   CONF.default_ephemeral_format or
+                                   const.DEFAULT_EPH_DISK_FMT)}
+            eph_list.append(eph_dict)
+        if eph_list:
+            disk_list.extend(eph_list)
+
+        os_distro = self._image_meta.properties.os_distro
+
+        self.driver.spawn(self._context, self._instance, self._image_meta,
+                          injected_files=None,
+                          admin_password=None,
+                          network_info=self._network_info,
+                          block_device_info=self._block_device_info,
+                          flavor=self._flavor)
+        generate_configdrive.assert_called_once_with(self._context,
+                                                     self._instance,
+                                                     os_distro,
+                                                     self._network_info,
+                                                     None, None)
+        image_query.assert_called_with(self._image_meta.id)
+        if not image_query_result[0]:
+            import_spawn_image.assert_called_once_with(self._context,
+                                                       self._image_meta.id,
+                                                       os_distro)
+
+        guest_create.assert_called_once_with('test0001', 1, 1024, disk_list)
+        setup_network.assert_called_once_with('test0001', self._network_info)
+        guest_deploy.assert_called_once_with('test0001',
+            'rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc',
+            '/tmp/fakecfg.tgz')
+
+        if eph_disks:
+            guest_config_minidisks.assert_called_once_with('test0001',
+                                                           eph_list)
+
+        wait_network_ready.assert_called_once_with('test0001',
+                                                   self._instance)
+        guest_start.assert_called_once_with('test0001')
+
+    def test_spawn_simple_path(self):
+        self._test_spawn(image_query_result=(
+            ["rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc"],
+            ["rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc"]),
+            eph_disks=[])
+
+    def test_spawn_image_not_in_backend(self):
+        self._test_spawn(image_query_result=(
+            [],
+            ["rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc"]),
+            eph_disks=[])
+
+    def test_spawn_with_ephemeral_disks(self):
+        self._test_spawn(image_query_result=(
+            ["rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc"],
+            ["rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc"]),
+            eph_disks=[{'guest_format': u'ext3',
+                        'device_name': u'/dev/sdb',
+                        'disk_bus': None,
+                        'device_type': None,
+                        'size': 1},
+                       {'guest_format': u'ext4',
+                        'device_name': u'/dev/sdc',
+                        'disk_bus': None,
+                        'device_type': None,
+                        'size': 2}])
 
     @mock.patch.object(driver.ZVMDriver, '_instance_exists')
     @mock.patch.object(sdkapi.SDKAPI, 'guest_delete')

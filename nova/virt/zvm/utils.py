@@ -97,7 +97,7 @@ class NetworkUtils(object):
 class VMUtils(object):
     def __init__(self):
         self._sdk_api = zvm_api.SDKAPI()
-        self._dist_manager = dist.ListDistManager()
+        self._dist_manager = dist.LinuxDistManager()
         self._pathutils = PathUtils()
         self._imageutils = ImageUtils()
 
@@ -184,7 +184,11 @@ class ImageUtils(object):
                   "server" % image_href)
 
         image_path = os.path.join(os.path.normpath(CONF.zvm_image_tmp_path),
-                                                   image_href)
+                                  image_href)
         if not os.path.exists(image_path):
             images.fetch(context, image_href, image_path)
-        self._sdk_api.image_import(image_path, image_os_version)
+        image_url = "file://" + image_path
+        image_meta = {'os_version': image_os_version}
+        remote_host = get_host()
+        self._sdk_api.image_import(image_url, image_meta=image_meta,
+                                   remote_host=remote_host)
