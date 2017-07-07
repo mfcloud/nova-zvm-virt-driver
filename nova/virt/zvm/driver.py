@@ -335,12 +335,26 @@ class ZVMDriver(driver.ComputeDriver):
 
     def power_off(self, instance, timeout=0, retry_interval=0):
         """Power off the specified instance."""
-        pass
+        inst_name = instance['name']
+        if self._instance_exists(inst_name):
+            LOG.info(_LI("Powering OFF instance %s"), inst_name,
+                     instance=instance)
+            self._sdk_api.guest_stop(inst_name, timeout, retry_interval)
+        else:
+            LOG.warning(_LW('Instance %s does not exist'), inst_name,
+                        instance=instance)
 
     def power_on(self, context, instance, network_info,
                  block_device_info=None):
         """Power on the specified instance."""
-        pass
+        inst_name = instance['name']
+        if self._instance_exists(inst_name):
+            LOG.info(_LI("Powering ON instance %s"), inst_name,
+                     instance=instance)
+            self._sdk_api.guest_start(inst_name)
+        else:
+            LOG.warning(_LW('Instance %s does not exist'), inst_name,
+                        instance=instance)
 
     def get_available_resource(self, nodename=None):
         """Retrieve resource information.
