@@ -235,16 +235,19 @@ class ZVMDriver(driver.ComputeDriver):
                              block_device_info)
 
     def _setup_network(self, vm_name, network_info):
-        network = network_info[0]['network']
-        ip_addr = network['subnets'][0]['ips'][0]['address']
-
         LOG.debug("Creating NICs for vm %s", vm_name)
-        nic_list = []
+        manage_IP_set = False
         for vif in network_info:
-            nic_dict = {'nic_id': vif['id'],
-                        'mac_addr': vif['address']}
-            nic_list.append(nic_dict)
-        self._sdk_api.guest_create_nic(vm_name, nic_list, ip_addr)
+            if not manage_IP_set:
+                network = vif['network']
+                ip_addr = network['subnets'][0]['ips'][0]['address']
+                self._sdk_api.guest_create_nic(vm_name, nic_id=vif['id'],
+                                               mac_addr=vif['address'],
+                                               ip_addr=ip_addr)
+                manage_IP_set = True
+            else:
+                self._sdk_api.guest_create_nic(vm_name, nic_id=vif['id'],
+                                               mac_addr=vif['address'])
 
     def _wait_network_ready(self, inst_name, instance):
         """Wait until neutron zvm-agent add all NICs to vm"""
