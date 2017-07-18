@@ -212,10 +212,10 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         self.assertEqual(res['memory_mb_used'], 765432)
         self.assertEqual(res['disk_available_least'], 38842)
 
-    @mock.patch.object(sdkapi.SDKAPI, 'host_list_guests')
-    def test_list_instances(self, host_list_guests):
+    @mock.patch.object(sdkapi.SDKAPI, 'guest_list')
+    def test_list_instances(self, guest_list):
         self.driver.list_instances()
-        host_list_guests.assert_called_once_with()
+        guest_list.assert_called_once_with()
 
     @mock.patch.object(sdkapi.SDKAPI, 'guest_get_info')
     @mock.patch.object(zvmutils, 'mapping_power_stat')
