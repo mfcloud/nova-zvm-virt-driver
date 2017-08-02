@@ -17,12 +17,11 @@ import os
 import six
 import tarfile
 
-from oslo_config import cfg
-from oslo_log import log as logging
-
 from nova import exception
 from nova import utils
 from nova.virt import configdrive
+from oslo_config import cfg
+from oslo_log import log as logging
 
 
 LOG = logging.getLogger(__name__)

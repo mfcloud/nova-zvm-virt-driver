@@ -16,9 +16,6 @@
 import os
 import pwd
 
-from oslo_config import cfg
-from oslo_log import log as logging
-
 from nova.api.metadata import base as instance_metadata
 from nova import block_device
 from nova.compute import power_state
@@ -26,11 +23,14 @@ from nova.i18n import _
 from nova.virt import configdrive
 from nova.virt import driver
 from nova.virt import images
-from nova.virt.zvm import configdrive as zvmconfigdrive
-from nova.virt.zvm import const
-from nova.virt.zvm import exception
+from oslo_config import cfg
+from oslo_log import log as logging
 from zvmsdk import api as zvm_api
 from zvmsdk import dist
+
+from nova_zvm.virt.zvm import configdrive as zvmconfigdrive
+from nova_zvm.virt.zvm import const
+from nova_zvm.virt.zvm import exception
 
 
 LOG = logging.getLogger(__name__)

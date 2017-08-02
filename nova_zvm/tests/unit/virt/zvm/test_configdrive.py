@@ -18,9 +18,10 @@
 import os
 
 from nova import test
-from nova.virt.zvm import conf
-from nova.virt.zvm import configdrive as zvmconfigdrive
 from oslo_utils import fileutils
+
+from nova_zvm.virt.zvm import conf
+from nova_zvm.virt.zvm import configdrive as zvmconfigdrive
 
 
 CONF = conf.CONF

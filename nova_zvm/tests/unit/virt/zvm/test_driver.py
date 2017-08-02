@@ -19,28 +19,25 @@ import eventlet
 import mock
 
 from nova.compute import power_state
-from nova.compute import vm_mode
 from nova import context
 from nova import exception as nova_exception
-from nova import objects
-from nova import test
-
 from nova.image import api as image_api
 from nova.network import model as network_model
+from nova import objects
+from nova.objects import fields as obj_fields
+from nova import test
 from nova.tests.unit import fake_instance
-
 from nova.tests import uuidsentinel
 from nova.virt import fake
 from nova.virt import hardware
-from nova.virt.zvm import conf
-from nova.virt.zvm import const
-from nova.virt.zvm import driver
-
-from nova.virt.zvm import utils as zvmutils
-
 from zvmsdk import api as sdkapi
 from zvmsdk import dist
 from zvmsdk import exception as sdkexception
+
+from nova_zvm.virt.zvm import conf
+from nova_zvm.virt.zvm import const
+from nova_zvm.virt.zvm import driver
+from nova_zvm.virt.zvm import utils as zvmutils
 
 
 CONF = conf.CONF
@@ -204,7 +201,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
             'hypervisor_hostname': 'fakenode',
             'supported_instances': [(const.ARCHITECTURE,
                                      const.HYPERVISOR_TYPE,
-                                     vm_mode.HVM)],
+                                     obj_fields.VMMode.HVM)],
             'ipl_time': 'IPL at 03/13/14 21:43:12 EDT',
             }]
         res = self.driver.get_available_resource('fakenode')
