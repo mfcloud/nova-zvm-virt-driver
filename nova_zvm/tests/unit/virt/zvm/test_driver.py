@@ -344,7 +344,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         setup_network.assert_called_once_with('test0001', self._network_info)
         guest_deploy.assert_called_once_with('test0001',
             'rhel7.2-s390x-netboot-0a0c576a_157f_42c8_bde5_2a254d8b77fc',
-            '/tmp/fakecfg.tgz')
+            '/tmp/fakecfg.tgz', zvmutils.get_host())
 
         if eph_disks:
             guest_config_minidisks.assert_called_once_with('test0001',

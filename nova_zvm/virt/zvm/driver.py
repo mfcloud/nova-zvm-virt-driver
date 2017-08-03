@@ -212,7 +212,7 @@ class ZVMDriver(driver.ComputeDriver):
             # Setup network for z/VM instance
             self._setup_network(instance['name'], network_info)
             self._sdk_api.guest_deploy(instance['name'], spawn_image_name,
-                                       transportfiles)
+                                       transportfiles, zvmutils.get_host())
 
             # Handle ephemeral disks
             if eph_list:
