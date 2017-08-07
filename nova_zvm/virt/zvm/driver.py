@@ -511,8 +511,7 @@ class ZVMDriver(driver.ComputeDriver):
         return self._sdk_api.guest_get_console_output(instance.name)
 
     def get_host_uptime(self):
-        with zvmutils.expect_invalid_xcat_resp_data(self._host_stats):
-            return self._host_stats[0]['ipl_time']
+        return self._host_stats[0]['ipl_time']
 
     def get_available_nodes(self, refresh=False):
         return [d['hypervisor_hostname'] for d in self._host_stats
