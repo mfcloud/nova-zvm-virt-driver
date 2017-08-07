@@ -20,7 +20,7 @@ import time
 
 from nova.compute import power_state
 from nova import exception as nova_exception
-from nova.i18n import _, _LI, _LW
+from nova.i18n import _
 from nova.image import api as image_api
 from nova.objects import fields as obj_fields
 from nova.objects import migrate_data as migrate_data_obj
@@ -82,9 +82,9 @@ class ZVMDriver(driver.ComputeDriver):
             except Exception as e:
                 # Ignore any exceptions and log as warning
                 _slp = len(_inc_slp) != 0 and _inc_slp.pop(0) or _slp
-                msg = _LW("Failed to get host stats while initializing zVM "
-                          "driver due to reason %(reason)s, will re-try in "
-                          "%(slp)d seconds")
+                msg = _("Failed to get host stats while initializing zVM "
+                        "driver due to reason %(reason)s, will re-try in "
+                        "%(slp)d seconds")
                 LOG.warning(msg, {'reason': six.text_type(e),
                                'slp': _slp})
                 time.sleep(_slp)
@@ -131,12 +131,12 @@ class ZVMDriver(driver.ComputeDriver):
         try:
             return self._get_instance_info(instance)
         except sdkexception.ZVMVirtualMachineNotExist:
-            LOG.warning(_LW("z/VM instance %s does not exist") % inst_name,
+            LOG.warning(_("z/VM instance %s does not exist") % inst_name,
                         instance=instance)
             raise nova_exception.InstanceNotFound(instance_id=inst_name)
         except Exception as err:
             # TODO(YDY): raise nova_exception.InstanceNotFound
-            LOG.warning(_LW("Failed to get the info of z/VM instance %s") %
+            LOG.warning(_("Failed to get the info of z/VM instance %s") %
                         inst_name, instance=instance)
             raise err
 
@@ -157,7 +157,7 @@ class ZVMDriver(driver.ComputeDriver):
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None,
               flavor=None):
-        LOG.info(_LI("Spawning new instance %s on zVM hypervisor") %
+        LOG.info(_("Spawning new instance %s on zVM hypervisor") %
                  instance['name'], instance=instance)
         # For zVM instance, limit the maximum length of instance name to \ 8
         if len(instance['name']) > 8:
@@ -223,7 +223,7 @@ class ZVMDriver(driver.ComputeDriver):
 
             self._sdk_api.guest_start(instance['name'])
             spawn_time = time.time() - spawn_start
-            LOG.info(_LI("Instance spawned succeeded in %s seconds") %
+            LOG.info(_("Instance spawned succeeded in %s seconds") %
                      spawn_time, instance=instance)
         except Exception as err:
             with excutils.save_and_reraise_exception():
@@ -274,18 +274,18 @@ class ZVMDriver(driver.ComputeDriver):
 
             except exception.ZVMBaseException as e:
                 # Ignore any zvm driver exceptions
-                LOG.info(_LI('encounter error %s during get vswitch info'),
+                LOG.info(_('encounter error %s during get vswitch info'),
                          e.format_message(), instance=instance)
                 return
 
             # Enter here means all NIC granted
-            LOG.info(_LI("All NICs are added in user direct for "
+            LOG.info(_("All NICs are added in user direct for "
                          "instance %s."), inst_name, instance=instance)
             raise loopingcall.LoopingCallDone()
 
         expiration = timeutils.utcnow() + datetime.timedelta(
                              seconds=CONF.zvm_reachable_timeout)
-        LOG.info(_LI("Wait neturon-zvm-agent to add NICs to %s user direct."),
+        LOG.info(_("Wait neturon-zvm-agent to add NICs to %s user direct."),
                  inst_name, instance=instance)
         timer = loopingcall.FixedIntervalLoopingCall(
                     _wait_for_nics_add_in_vm, inst_name, expiration)
@@ -300,11 +300,11 @@ class ZVMDriver(driver.ComputeDriver):
 
         inst_name = instance['name']
         if self._instance_exists(inst_name):
-            LOG.info(_LI("Destroying instance %s"), inst_name,
+            LOG.info(_("Destroying instance %s"), inst_name,
                      instance=instance)
             self._sdk_api.guest_delete(inst_name)
         else:
-            LOG.warning(_LW('Instance %s does not exist'), inst_name,
+            LOG.warning(_('Instance %s does not exist'), inst_name,
                         instance=instance)
 
     def manage_image_cache(self, context, filtered_instances):
@@ -340,11 +340,11 @@ class ZVMDriver(driver.ComputeDriver):
         """Power off the specified instance."""
         inst_name = instance['name']
         if self._instance_exists(inst_name):
-            LOG.info(_LI("Powering OFF instance %s"), inst_name,
+            LOG.info(_("Powering OFF instance %s"), inst_name,
                      instance=instance)
             self._sdk_api.guest_stop(inst_name, timeout, retry_interval)
         else:
-            LOG.warning(_LW('Instance %s does not exist'), inst_name,
+            LOG.warning(_('Instance %s does not exist'), inst_name,
                         instance=instance)
 
     def power_on(self, context, instance, network_info,
@@ -352,11 +352,11 @@ class ZVMDriver(driver.ComputeDriver):
         """Power on the specified instance."""
         inst_name = instance['name']
         if self._instance_exists(inst_name):
-            LOG.info(_LI("Powering ON instance %s"), inst_name,
+            LOG.info(_("Powering ON instance %s"), inst_name,
                      instance=instance)
             self._sdk_api.guest_start(inst_name)
         else:
-            LOG.warning(_LW('Instance %s does not exist'), inst_name,
+            LOG.warning(_('Instance %s does not exist'), inst_name,
                         instance=instance)
 
     def get_available_resource(self, nodename=None):
