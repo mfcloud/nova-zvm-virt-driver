@@ -23,7 +23,6 @@ from nova import exception as nova_exception
 from nova.i18n import _
 from nova.image import api as image_api
 from nova.objects import fields as obj_fields
-from nova.objects import migrate_data as migrate_data_obj
 from nova.virt import driver
 from nova.virt import hardware
 from oslo_log import log as logging
@@ -307,14 +306,6 @@ class ZVMDriver(driver.ComputeDriver):
             LOG.warning(_('Instance %s does not exist'), inst_name,
                         instance=instance)
 
-    def manage_image_cache(self, context, filtered_instances):
-        """Clean the image cache in xCAT MN."""
-        pass
-
-    def reboot(self, context, instance, network_info, reboot_type,
-               block_device_info=None, bad_volumes_callback=None):
-        pass
-
     def attach_volume(self, context, connection_info, instance, mountpoint,
                       disk_bus=None, device_type=None, encryption=None):
         """Attach the disk to the instance at mountpoint using info."""
@@ -323,17 +314,6 @@ class ZVMDriver(driver.ComputeDriver):
     def detach_volume(self, connection_info, instance, mountpoint=None,
                       encryption=None):
         """Detach the disk attached to the instance."""
-        pass
-
-    def snapshot(self, context, instance, image_href, update_task_state):
-        pass
-
-    def pause(self, instance):
-        """Pause the specified instance."""
-        pass
-
-    def unpause(self, instance):
-        """Unpause paused VM instance."""
         pass
 
     def power_off(self, instance, timeout=0, retry_interval=0):
@@ -394,55 +374,6 @@ class ZVMDriver(driver.ComputeDriver):
 
         return dic
 
-    def check_can_live_migrate_destination(self, ctxt, instance_ref,
-                                           src_compute_info, dst_compute_info,
-                                           block_migration=False,
-                                           disk_over_commit=False):
-        return migrate_data_obj.LibvirtLiveMigrateData()
-
-    def check_can_live_migrate_source(self, ctxt, instance_ref,
-                                      dest_check_data, block_device_info=None):
-        return migrate_data_obj.LibvirtLiveMigrateData()
-
-    def cleanup_live_migration_destination_check(self, ctxt,
-                                                   dest_check_data):
-        # For z/VM, nothing needed to be cleanup
-        return
-
-    def pre_live_migration(self, ctxt, instance_ref, block_device_info,
-                           network_info, disk_info, migrate_data=None):
-        pass
-
-    def pre_block_migration(self, ctxt, instance_ref, disk_info):
-        # We don't support block_migration
-        return
-
-    def live_migration(self, ctxt, instance_ref, dest,
-                       post_method, recover_method, block_migration=False,
-                       migrate_data=None):
-        pass
-
-    def post_live_migration_at_destination(self, ctxt, instance_ref,
-                                           network_info,
-                                           block_migration=False,
-                                           block_device_info=None):
-        pass
-
-    def unfilter_instance(self, instance, network_info):
-        return
-
-    def reset_network(self, instance):
-        pass
-
-    def inject_network_info(self, instance, nw_info):
-        pass
-
-    def plug_vifs(self, instance, network_info):
-        pass
-
-    def unplug_vifs(self, instance, network_info):
-        pass
-
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         # It enforces security groups on host initialization and live
         # migration. In z/VM we do not assume instances running upon host
@@ -482,30 +413,6 @@ class ZVMDriver(driver.ComputeDriver):
         caps.append(data)
 
         return caps
-
-    def get_volume_connector(self, instance):
-        pass
-
-    def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, network_info,
-                                   block_device_info=None,
-                                   timeout=0, retry_interval=0):
-        pass
-
-    def finish_migration(self, context, migration, instance, disk_info,
-                         network_info, image_meta, resize_instance,
-                         block_device_info=None, power_on=True):
-        pass
-
-    def confirm_migration(self, migration, instance, network_info):
-        pass
-
-    def finish_revert_migration(self, context, instance, network_info,
-                                block_device_info=None, power_on=True):
-        pass
-
-    def set_admin_password(self, instance, new_pass=None):
-        pass
 
     def get_console_output(self, context, instance):
         return self._sdk_api.guest_get_console_output(instance.name)
