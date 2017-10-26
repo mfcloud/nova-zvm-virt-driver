@@ -45,6 +45,9 @@ Possible Values:
     A value of 0 is used for debug. In this case the underlying z/VM guest
     will not be deleted when the instance is marked in ERROR state.
 """),
+    cfg.StrOpt('zvm_sdkserver_addr',
+               default='127.0.0.1',
+    ),
     ]
 
 CONF = cfg.CONF

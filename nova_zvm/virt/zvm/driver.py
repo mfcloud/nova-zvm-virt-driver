@@ -18,7 +18,6 @@ import eventlet
 import six
 import time
 
-from nova.compute import power_state
 from nova import exception as nova_exception
 from nova.i18n import _
 from nova.image import api as image_api
@@ -30,8 +29,6 @@ from oslo_serialization import jsonutils
 from oslo_service import loopingcall
 from oslo_utils import excutils
 from oslo_utils import timeutils
-from zvmsdk import api as sdkapi
-from zvmsdk import exception as sdkexception
 
 from nova_zvm.virt.zvm import conf
 from nova_zvm.virt.zvm import const
@@ -59,7 +56,7 @@ class ZVMDriver(driver.ComputeDriver):
 
     def __init__(self, virtapi):
         super(ZVMDriver, self).__init__(virtapi)
-        self._sdk_api = sdkapi.SDKAPI()
+        self._sdkreq = zvmutils.zVMSDKRequestHandler()
         self._vmutils = zvmutils.VMUtils()
 
         self._image_api = image_api.API()
@@ -94,56 +91,31 @@ class ZVMDriver(driver.ComputeDriver):
         """
         pass
 
-    def _get_instance_info(self, instance):
-        inst_name = instance['name']
-        vm_info = self._sdk_api.guest_get_info(inst_name)
-        _instance_info = hardware.InstanceInfo()
+    def get_info(self, instance):
+        """Get the current status of an instance."""
+        power_stat = ''
+        try:
+            power_stat = self._sdkreq.call('guest_get_power_state',
+                                           instance['name'])
+        except exception.ZVMSDKRequestFailed as err:
+            if err.results['overalRC'] == 404:
+                # instance not exists
+                LOG.warning("Get power state of non-exist instance: %s" %
+                            instance['name'])
+                raise nova_exception.InstanceNotFound(instance_id=instance.id)
+            else:
+                raise
 
-        power_stat = zvmutils.mapping_power_stat(vm_info['power_state'])
-        if ((power_stat == power_state.RUNNING) and
-            (instance['power_state'] == power_state.PAUSED)):
-            # return paused state only previous power state is paused
-            _instance_info.state = power_state.PAUSED
-        else:
-            _instance_info.state = power_stat
-
-        _instance_info.max_mem_kb = vm_info['max_mem_kb']
-        _instance_info.mem_kb = vm_info['mem_kb']
-        _instance_info.num_cpu = vm_info['num_cpu']
-        _instance_info.cpu_time_ns = vm_info['cpu_time_us'] * 1000
+        power_stat = zvmutils.mapping_power_stat(power_stat)
+        _instance_info = hardware.InstanceInfo(power_stat)
 
         return _instance_info
-
-    def get_info(self, instance):
-        """Get the current status of an instance, by name (not ID!)
-
-        Returns a dict containing:
-        :state:           the running state, one of the power_state codes
-        :max_mem:         (int) the maximum memory in KBytes allowed
-        :mem:             (int) the memory in KBytes used by the domain
-        :num_cpu:         (int) the number of virtual CPUs for the domain
-        :cpu_time:        (int) the CPU time used in nanoseconds
-
-        """
-        inst_name = instance['name']
-
-        try:
-            return self._get_instance_info(instance)
-        except sdkexception.ZVMVirtualMachineNotExist:
-            LOG.warning(_("z/VM instance %s does not exist") % inst_name,
-                        instance=instance)
-            raise nova_exception.InstanceNotFound(instance_id=inst_name)
-        except Exception as err:
-            # TODO(YDY): raise nova_exception.InstanceNotFound
-            LOG.warning(_("Failed to get the info of z/VM instance %s") %
-                        inst_name, instance=instance)
-            raise err
 
     def list_instances(self):
         """Return the names of all the instances known to the virtualization
         layer, as a list.
         """
-        return self._sdk_api.guest_list()
+        return self._sdkreq.call('guest_list')
 
     def _instance_exists(self, instance_name):
         """Overwrite this to using instance name as input parameter."""
@@ -154,8 +126,8 @@ class ZVMDriver(driver.ComputeDriver):
         return self._instance_exists(instance.name)
 
     def spawn(self, context, instance, image_meta, injected_files,
-              admin_password, network_info=None, block_device_info=None,
-              flavor=None):
+              admin_password, allocations, network_info=None,
+              block_device_info=None, flavor=None):
         LOG.info(_("Spawning new instance %s on zVM hypervisor") %
                  instance['name'], instance=instance)
         # For zVM instance, limit the maximum length of instance name to \ 8
@@ -168,24 +140,22 @@ class ZVMDriver(driver.ComputeDriver):
         try:
             spawn_start = time.time()
             os_distro = image_meta.properties.os_distro
-
-            # TODO(YaLian) will remove network files from this
             transportfiles = self._vmutils.generate_configdrive(
-                            context, instance, os_distro, network_info,
-                            injected_files, admin_password)
+                            context, instance, injected_files, admin_password)
 
             with self._imageop_semaphore:
-                spawn_image_exist = self._sdk_api.image_query(
-                                    image_meta.id)
+                spawn_image_exist = self._sdkreq.call('image_query',
+                                                      image_meta.id)
                 if not spawn_image_exist:
                     self._imageutils.import_spawn_image(
                         context, image_meta.id, os_distro)
 
-            spawn_image_name = self._sdk_api.image_query(
-                                    image_meta.id)[0]
+            resp = self._sdkreq.call('image_query',
+                                                 image_meta.id)
+            spawn_image_name = resp[0][0]
             if instance['root_gb'] == 0:
-                root_disk_size = self._sdk_api.image_get_root_disk_size(
-                                                spawn_image_name)
+                root_disk_size = self._sdkreq.call('image_get_root_disk_size',
+                                                   spawn_image_name)
             else:
                 root_disk_size = '%ig' % instance['root_gb']
 
@@ -205,22 +175,26 @@ class ZVMDriver(driver.ComputeDriver):
 
             if eph_list:
                 disk_list.extend(eph_list)
-            self._sdk_api.guest_create(instance['name'], instance['vcpus'],
-                                       instance['memory_mb'], disk_list)
+
+            # Create the guest vm
+            self._sdkreq.call('guest_create', instance['name'],
+                         instance['vcpus'], instance['memory_mb'], disk_list)
+
+            # Deploy image to the guest vm
+            self._sdkreq.call('guest_deploy', instance['name'],
+                         spawn_image_name, transportfiles, zvmutils.get_host())
 
             # Setup network for z/VM instance
-            self._setup_network(instance['name'], network_info)
-            self._sdk_api.guest_deploy(instance['name'], spawn_image_name,
-                                       transportfiles, zvmutils.get_host())
+            self._setup_network(instance['name'], os_distro, network_info)
 
             # Handle ephemeral disks
             if eph_list:
-                self._sdk_api.guest_config_minidisks(instance['name'],
-                                                     eph_list)
+                self._sdkreq.call('guest_config_minidisks',
+                                  instance['name'], eph_list)
 
-            self._wait_network_ready(instance['name'], instance)
+            self._wait_network_ready(instance)
 
-            self._sdk_api.guest_start(instance['name'])
+            self._sdkreq.call('guest_start', instance['name'])
             spawn_time = time.time() - spawn_start
             LOG.info(_("Instance spawned succeeded in %s seconds") %
                      spawn_time, instance=instance)
@@ -233,23 +207,25 @@ class ZVMDriver(driver.ComputeDriver):
                 self.destroy(context, instance, network_info,
                              block_device_info)
 
-    def _setup_network(self, vm_name, network_info):
+    def _setup_network(self, vm_name, os_distro, network_info):
         LOG.debug("Creating NICs for vm %s", vm_name)
-        manage_IP_set = False
+        inst_nets = []
         for vif in network_info:
-            if not manage_IP_set:
-                network = vif['network']
-                ip_addr = network['subnets'][0]['ips'][0]['address']
-                self._sdk_api.guest_create_nic(vm_name, nic_id=vif['id'],
-                                               mac_addr=vif['address'],
-                                               ip_addr=ip_addr)
-                manage_IP_set = True
-            else:
-                self._sdk_api.guest_create_nic(vm_name, nic_id=vif['id'],
-                                               mac_addr=vif['address'])
+            subnet = vif['network']['subnets'][0]
+            _net = {'ip_addr': subnet['ips'][0]['address'],
+                    'gateway_addr': subnet['gateway']['address'],
+                    'cidr': subnet['cidr'],
+                    'mac_addr': vif['address']}
+            inst_nets.append(_net)
 
-    def _wait_network_ready(self, inst_name, instance):
+        if inst_nets:
+            self._sdkreq.call('guest_create_network_interface',
+                              vm_name, os_distro, inst_nets)
+
+    def _wait_network_ready(self, instance):
         """Wait until neutron zvm-agent add all NICs to vm"""
+        inst_name = instance['name']
+
         def _wait_for_nics_add_in_vm(inst_name, expiration):
             if (CONF.zvm_reachable_timeout and
                     timeutils.utcnow() > expiration):
@@ -258,12 +234,12 @@ class ZVMDriver(driver.ComputeDriver):
                 raise exception.ZVMNetworkError(msg=msg)
 
             try:
-                switch_dict = self._sdk_api.guest_get_nic_vswitch_info(
+                switch_dict = self._sdkreq.call('guest_get_nic_vswitch_info',
                                                 inst_name)
                 if switch_dict and '' not in switch_dict.values():
                     for key in switch_dict:
-                        result = self._sdk_api.guest_get_definition_info(
-                                                inst_name, nic_coupled=key)
+                        result = self._sdkreq.call('guest_get_definition_info',
+                                                   inst_name, nic_coupled=key)
                         if not result['nic_coupled']:
                             return
                 else:
@@ -301,7 +277,7 @@ class ZVMDriver(driver.ComputeDriver):
         if self._instance_exists(inst_name):
             LOG.info(_("Destroying instance %s"), inst_name,
                      instance=instance)
-            self._sdk_api.guest_delete(inst_name)
+            self._sdkreq.call('guest_delete', inst_name)
         else:
             LOG.warning(_('Instance %s does not exist'), inst_name,
                         instance=instance)
@@ -322,7 +298,7 @@ class ZVMDriver(driver.ComputeDriver):
         if self._instance_exists(inst_name):
             LOG.info(_("Powering OFF instance %s"), inst_name,
                      instance=instance)
-            self._sdk_api.guest_stop(inst_name, timeout, retry_interval)
+            self._sdkreq.call('guest_stop', inst_name, timeout, retry_interval)
         else:
             LOG.warning(_('Instance %s does not exist'), inst_name,
                         instance=instance)
@@ -334,7 +310,7 @@ class ZVMDriver(driver.ComputeDriver):
         if self._instance_exists(inst_name):
             LOG.info(_("Powering ON instance %s"), inst_name,
                      instance=instance)
-            self._sdk_api.guest_start(inst_name)
+            self._sdkreq.call('guest_start', inst_name)
         else:
             LOG.warning(_('Instance %s does not exist'), inst_name,
                         instance=instance)
@@ -389,7 +365,7 @@ class ZVMDriver(driver.ComputeDriver):
 
         caps = []
 
-        info = self._sdk_api.host_get_info()
+        info = self._sdkreq.call('host_get_info')
 
         data = {'host': CONF.host,
                 'allowed_vm_type': const.ALLOWED_VM_TYPE}
@@ -415,7 +391,7 @@ class ZVMDriver(driver.ComputeDriver):
         return caps
 
     def get_console_output(self, context, instance):
-        return self._sdk_api.guest_get_console_output(instance.name)
+        return self._sdkreq.call('guest_get_console_output', instance.name)
 
     def get_host_uptime(self):
         return self._host_stats[0]['ipl_time']

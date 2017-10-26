@@ -44,3 +44,14 @@ class ZVMConfigDriveError(ZVMBaseException):
 
 class ZVMRetryException(ZVMBaseException):
     pass
+
+
+class ZVMSDKRequestFailed(ZVMBaseException):
+    msg_fmt = _('z/VM SDK request failed: %(msg)s')
+
+    def __init__(self, **kwargs):
+        self.results = {'rs': 0, 'overallRC': 1, 'modID': 0, 'rc': 0,
+                        'output': '', 'errmsg': ''}
+        if 'results' in kwargs:
+            self.results = kwargs.pop('results')
+        super(ZVMSDKRequestFailed, self).__init__(None, **kwargs)
