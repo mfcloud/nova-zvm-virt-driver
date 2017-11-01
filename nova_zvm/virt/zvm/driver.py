@@ -98,7 +98,7 @@ class ZVMDriver(driver.ComputeDriver):
             power_stat = self._sdkreq.call('guest_get_power_state',
                                            instance['name'])
         except exception.ZVMSDKRequestFailed as err:
-            if err.results['overalRC'] == 404:
+            if err.results['overallRC'] == 404:
                 # instance not exists
                 LOG.warning("Get power state of non-exist instance: %s" %
                             instance['name'])
