@@ -239,7 +239,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
     @mock.patch.object(zvmutils.zVMSDKRequestHandler, 'call')
     def test_get_info_instance_not_exist_error(self, get_power_state):
         get_power_state.side_effect = exception.ZVMSDKRequestFailed(msg='err',
-                                                    results={'overalRC': 404})
+                                                    results={'overallRC': 404})
         fake_inst = fake_instance.fake_instance_obj(self._context,
                     name='fake', power_state=power_state.RUNNING,
                     memory_mb='1024',
