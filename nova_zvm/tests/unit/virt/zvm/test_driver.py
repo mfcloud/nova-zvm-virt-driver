@@ -274,7 +274,8 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         sdk_req_resp = []
         # image query return '' if has step of import image
         if has_import_image:
-            sdk_req_resp.append('')
+            sdk_req_resp.append(exception.ZVMSDKRequestFailed(msg='testerr',
+                                                results={'overallRC': 404}))
         else:
             sdk_req_resp.append([[self._image_meta.id]])
         # image query again

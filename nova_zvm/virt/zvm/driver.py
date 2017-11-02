@@ -143,12 +143,21 @@ class ZVMDriver(driver.ComputeDriver):
             transportfiles = self._vmutils.generate_configdrive(
                             context, instance, injected_files, admin_password)
 
-            with self._imageop_semaphore:
+            spawn_image_exist = False
+            try:
                 spawn_image_exist = self._sdkreq.call('image_query',
                                                       image_meta.id)
-                if not spawn_image_exist:
-                    self._imageutils.import_spawn_image(
-                        context, image_meta.id, os_distro)
+            except exception.ZVMSDKRequestFailed as err:
+                if err.results['overallRC'] == 404:
+                    # image not exist, nothing to do
+                    pass
+                else:
+                    raise err
+
+            if not spawn_image_exist:
+                with self._imageop_semaphore:
+                    self._imageutils.import_spawn_image(context, image_meta.id,
+                                                        os_distro)
 
             resp = self._sdkreq.call('image_query',
                                                  image_meta.id)

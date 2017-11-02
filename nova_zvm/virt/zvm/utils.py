@@ -82,9 +82,9 @@ class zVMSDKRequestHandler(object):
             return results['output']
         else:
             msg = ("SDK request %(api)s failed with parameters: %(args)s "
-                   "%(kwargs)s . Error messages: %(errmsg)s" %
+                   "%(kwargs)s .  Results: %(results)s" %
                    {'api': func_name, 'args': str(args), 'kwargs': str(kwargs),
-                    'errmsg': results['errmsg']})
+                    'results': str(results)})
             LOG.debug(msg)
             raise exception.ZVMSDKRequestFailed(msg=msg, results=results)
 
