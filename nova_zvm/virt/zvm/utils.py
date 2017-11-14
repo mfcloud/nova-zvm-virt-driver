@@ -180,5 +180,5 @@ class ImageUtils(object):
         image_url = "file://" + image_path
         image_meta = {'os_version': image_os_version}
         remote_host = get_host()
-        self._sdkreq.call('image_import', image_url, image_meta=image_meta,
-                          remote_host=remote_host)
+        self._sdkreq.call('image_import', image_href, image_url,
+                          image_meta=image_meta, remote_host=remote_host)

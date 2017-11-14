@@ -224,7 +224,8 @@ class ZVMDriver(driver.ComputeDriver):
             _net = {'ip_addr': subnet['ips'][0]['address'],
                     'gateway_addr': subnet['gateway']['address'],
                     'cidr': subnet['cidr'],
-                    'mac_addr': vif['address']}
+                    'mac_addr': vif['address'],
+                    'nic_id': vif['id']}
             inst_nets.append(_net)
 
         if inst_nets:
