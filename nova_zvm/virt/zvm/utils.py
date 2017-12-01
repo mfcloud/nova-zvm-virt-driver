@@ -25,7 +25,8 @@ from nova.virt import driver
 from nova.virt import images
 from oslo_config import cfg
 from oslo_log import log as logging
-from sdkclient import client as sdkclient
+import six.moves.urllib.parse as urlparse
+from zvmconnector import connector
 
 from nova_zvm.virt.zvm import configdrive as zvmconfigdrive
 from nova_zvm.virt.zvm import const
@@ -74,10 +75,11 @@ def get_host():
 class zVMSDKRequestHandler(object):
 
     def __init__(self):
-        self._sdkclient = sdkclient.SDKClient(CONF.zvm_sdkserver_addr)
+        _url = urlparse.urlparse(CONF.zvm.cloud_connector_url)
+        self._conn = connector.ZVMConnector(_url.hostname, _url.port)
 
     def call(self, func_name, *args, **kwargs):
-        results = self._sdkclient.send_request(func_name, *args, **kwargs)
+        results = self._conn.send_request(func_name, *args, **kwargs)
         if results['overallRC'] == 0:
             return results['output']
         else:

@@ -54,6 +54,7 @@ class ZVMDriverTestCases(test.NoDBTestCase):
         self.flags(host='fakehost',
                    my_ip='10.1.1.10',
                    instance_name_template='test%04x')
+        self.flags(cloud_connector_url='https://1.1.1.1:1111', group='zvm')
         update_host_status.return_value = [{
             'host': 'fakehost',
             'allowed_vm_type': 'zLinux',

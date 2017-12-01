@@ -14,7 +14,20 @@
 
 from oslo_config import cfg
 
+
+zvm_opt_group = cfg.OptGroup('zvm',
+                             title='zVM Options',
+                             help="""
+z/VM configuration options when set compute_driver=zvm.driver.ZVMDriver.
+""")
+
+
 zvm_opts = [
+    cfg.StrOpt('cloud_connector_url',
+               help="""
+URL to be used to communicate with z/VM Cloud Connector.
+Example: https://10.10.10.1:8080.
+"""),
     cfg.StrOpt('zvm_image_tmp_path',
                default='/var/lib/nova/images',
                help="""
@@ -45,10 +58,9 @@ Possible Values:
     A value of 0 is used for debug. In this case the underlying z/VM guest
     will not be deleted when the instance is marked in ERROR state.
 """),
-    cfg.StrOpt('zvm_sdkserver_addr',
-               default='127.0.0.1',
-    ),
     ]
 
+
 CONF = cfg.CONF
-CONF.register_opts(zvm_opts)
+CONF.register_group(zvm_opt_group)
+CONF.register_opts(zvm_opts, group=zvm_opt_group)
