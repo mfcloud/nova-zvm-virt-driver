@@ -28,7 +28,7 @@ zvm_opts = [
 URL to be used to communicate with z/VM Cloud Connector.
 Example: https://10.10.10.1:8080.
 """),
-    cfg.StrOpt('zvm_image_tmp_path',
+    cfg.StrOpt('image_tmp_path',
                default='/var/lib/nova/images',
                help="""
 The path at which images will be stored (snapshot, deploy, etc).
@@ -40,7 +40,7 @@ the directory location.
 Possible values:
     A path in host that running compute service.
 """),
-    cfg.IntOpt('zvm_reachable_timeout',
+    cfg.IntOpt('reachable_timeout',
                default=300,
                help="""
 Timeout (seconds) to wait for an instance to start.

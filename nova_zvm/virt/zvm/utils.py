@@ -14,15 +14,12 @@
 
 
 import os
-import pwd
 
 from nova.api.metadata import base as instance_metadata
-from nova import block_device
 from nova.compute import power_state
+from nova import exception
 from nova.i18n import _
 from nova.virt import configdrive
-from nova.virt import driver
-from nova.virt import images
 from oslo_config import cfg
 from oslo_log import log as logging
 import six.moves.urllib.parse as urlparse
@@ -30,46 +27,17 @@ from zvmconnector import connector
 
 from nova_zvm.virt.zvm import configdrive as zvmconfigdrive
 from nova_zvm.virt.zvm import const
-from nova_zvm.virt.zvm import exception
 
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
 
-CONF.import_opt('host', 'nova.conf')
 CONF.import_opt('instances_path', 'nova.compute.manager')
-CONF.import_opt('my_ip', 'nova.conf')
 
 
 def mapping_power_stat(power_stat):
     """Translate power state to OpenStack defined constants."""
     return const.ZVM_POWER_STAT.get(power_stat, power_state.NOSTATE)
-
-
-def _volume_in_mapping(mount_device, block_device_info):
-    block_device_list = [block_device.strip_dev(vol['mount_device'])
-                         for vol in
-                         driver.block_device_info_get_mapping(
-                             block_device_info)]
-    LOG.debug("block_device_list %s", block_device_list)
-    return block_device.strip_dev(mount_device) in block_device_list
-
-
-def is_volume_root(root_device, mountpoint):
-    """This judges if the moutpoint equals the root_device."""
-    return block_device.strip_dev(mountpoint) == block_device.strip_dev(
-                                                                root_device)
-
-
-def is_boot_from_volume(block_device_info):
-    root_mount_device = driver.block_device_info_get_root(block_device_info)
-    boot_from_volume = _volume_in_mapping(root_mount_device,
-                                          block_device_info)
-    return root_mount_device, boot_from_volume
-
-
-def get_host():
-    return ''.join([pwd.getpwuid(os.geteuid()).pw_name, '@', CONF.my_ip])
 
 
 class zVMSDKRequestHandler(object):
@@ -88,7 +56,7 @@ class zVMSDKRequestHandler(object):
                    {'api': func_name, 'args': str(args), 'kwargs': str(kwargs),
                     'results': str(results)})
             LOG.debug(msg)
-            raise exception.ZVMSDKRequestFailed(msg=msg, results=results)
+            raise exception.NovaException(message=msg, results=results)
 
 
 class PathUtils(object):
@@ -106,11 +74,6 @@ class PathUtils(object):
     def get_console_log_path(self, os_node, instance_name):
         return os.path.join(self.get_instance_path(os_node, instance_name),
                             "console.log")
-
-
-class NetworkUtils(object):
-    """Utilities for z/VM network operator."""
-    pass
 
 
 class VMUtils(object):
@@ -139,7 +102,9 @@ class VMUtils(object):
         if CONF.config_drive_format not in ['tgz', 'iso9660']:
             msg = (_("Invalid config drive format %s") %
                    CONF.config_drive_format)
-            raise exception.ZVMConfigDriveError(msg=msg)
+            LOG.debug(msg)
+            raise exception.ConfigDriveUnsupportedFormat(
+                            format=CONF.config_drive_format)
 
         LOG.debug('Using config drive', instance=instance)
 
@@ -163,24 +128,3 @@ class VMUtils(object):
             cdb.make_drive(configdrive_tgz)
 
         return configdrive_tgz
-
-
-class ImageUtils(object):
-
-    def __init__(self):
-        self._pathutils = PathUtils()
-        self._sdkreq = zVMSDKRequestHandler()
-
-    def import_spawn_image(self, context, image_href, image_os_version):
-        LOG.debug("Downloading the image %s from glance to nova compute "
-                  "server" % image_href)
-
-        image_path = os.path.join(os.path.normpath(CONF.zvm_image_tmp_path),
-                                  image_href)
-        if not os.path.exists(image_path):
-            images.fetch(context, image_href, image_path)
-        image_url = "file://" + image_path
-        image_meta = {'os_version': image_os_version}
-        remote_host = get_host()
-        self._sdkreq.call('image_import', image_href, image_url,
-                          image_meta=image_meta, remote_host=remote_host)
