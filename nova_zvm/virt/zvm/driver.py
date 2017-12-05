@@ -129,7 +129,7 @@ class ZVMDriver(driver.ComputeDriver):
             power_stat = self._sdkreq.call('guest_get_power_state',
                                            instance['name'])
         except exception.NovaException as err:
-            if err.results['overallRC'] == 404:
+            if err.kwargs['results']['overallRC'] == 404:
                 # instance not exists
                 LOG.warning("Get power state of non-exist instance: %s" %
                             instance['name'])
@@ -186,9 +186,10 @@ class ZVMDriver(driver.ComputeDriver):
                               disk_list=disk_list)
 
             # Deploy image to the guest vm
+            remotehost = self._get_host()
             self._sdkreq.call('guest_deploy', instance['name'],
                               spawn_image_name, transportfiles=transportfiles,
-                              remotehost=zvmutils.get_host())
+                              remotehost=remotehost)
 
             # Setup network for z/VM instance
             self._setup_network(instance['name'], os_distro, network_info,
@@ -220,7 +221,7 @@ class ZVMDriver(driver.ComputeDriver):
             spawn_image_exist = self._sdkreq.call('image_query',
                                                   imagename=image_meta_id)
         except exception.NovaException as err:
-            if err.results['overallRC'] == 404:
+            if err.kwargs['results']['overallRC'] == 404:
                 # image not exist, nothing to do
                 pass
             else:
@@ -241,7 +242,7 @@ class ZVMDriver(driver.ComputeDriver):
             root_disk_size = '%ig' % instance['root_gb']
 
         disk_list = []
-        root_disk = {'size': root_disk_size['output'],
+        root_disk = {'size': root_disk_size,
                      'is_boot_disk': True
                     }
         disk_list.append(root_disk)
@@ -358,3 +359,6 @@ class ZVMDriver(driver.ComputeDriver):
         else:
             LOG.warning(_('Instance %s does not exist'), inst_name,
                         instance=instance)
+
+    def get_host_uptime(self):
+        return self._host_stats['ipl_time']
