@@ -15,13 +15,6 @@
 from oslo_config import cfg
 
 
-zvm_opt_group = cfg.OptGroup('zvm',
-                             title='zVM Options',
-                             help="""
-z/VM configuration options when set compute_driver=zvm.driver.ZVMDriver.
-""")
-
-
 zvm_opts = [
     cfg.StrOpt('cloud_connector_url',
                help="""
@@ -62,5 +55,4 @@ Possible Values:
 
 
 CONF = cfg.CONF
-CONF.register_group(zvm_opt_group)
-CONF.register_opts(zvm_opts, group=zvm_opt_group)
+CONF.register_opts(zvm_opts)
