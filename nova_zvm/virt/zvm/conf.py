@@ -16,12 +16,12 @@ from oslo_config import cfg
 
 
 zvm_opts = [
-    cfg.StrOpt('cloud_connector_url',
+    cfg.StrOpt('zvm_cloud_connector_url',
                help="""
 URL to be used to communicate with z/VM Cloud Connector.
 Example: https://10.10.10.1:8080.
 """),
-    cfg.StrOpt('image_tmp_path',
+    cfg.StrOpt('zvm_image_tmp_path',
                default='/var/lib/nova/images',
                help="""
 The path at which images will be stored (snapshot, deploy, etc).
@@ -33,7 +33,7 @@ the directory location.
 Possible values:
     A path in host that running compute service.
 """),
-    cfg.IntOpt('reachable_timeout',
+    cfg.IntOpt('zvm_reachable_timeout',
                default=300,
                help="""
 Timeout (seconds) to wait for an instance to start.

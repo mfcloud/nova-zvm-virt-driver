@@ -280,7 +280,7 @@ class ZVMDriver(driver.ComputeDriver):
         inst_name = instance['name']
 
         def _wait_for_nics_add_in_vm(inst_name, expiration):
-            if (CONF.zvm.reachable_timeout and
+            if (CONF.zvm_reachable_timeout and
                     timeutils.utcnow() > expiration):
                 msg = _("NIC update check failed "
                         "on instance:%s") % instance.uuid
@@ -313,7 +313,7 @@ class ZVMDriver(driver.ComputeDriver):
             raise loopingcall.LoopingCallDone()
 
         expiration = timeutils.utcnow() + datetime.timedelta(
-                             seconds=CONF.zvm.reachable_timeout)
+                             seconds=CONF.zvm_reachable_timeout)
         LOG.info(_("Wait neturon-zvm-agent to add NICs to %s user direct."),
                  inst_name, instance=instance)
         timer = loopingcall.FixedIntervalLoopingCall(
@@ -338,7 +338,7 @@ class ZVMDriver(driver.ComputeDriver):
         LOG.debug("Downloading the image %s from glance to nova compute "
                   "server" % image_href)
 
-        image_path = os.path.join(os.path.normpath(CONF.zvm.image_tmp_path),
+        image_path = os.path.join(os.path.normpath(CONF.zvm_image_tmp_path),
                                   image_href)
         if not os.path.exists(image_path):
             images.fetch(context, image_href, image_path)

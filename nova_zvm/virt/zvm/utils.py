@@ -43,7 +43,7 @@ def mapping_power_stat(power_stat):
 class zVMSDKRequestHandler(object):
 
     def __init__(self):
-        _url = urlparse.urlparse(CONF.zvm.cloud_connector_url)
+        _url = urlparse.urlparse(CONF.zvm_cloud_connector_url)
         self._conn = connector.ZVMConnector(_url.hostname, _url.port)
 
     def call(self, func_name, *args, **kwargs):
