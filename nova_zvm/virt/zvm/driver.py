@@ -175,7 +175,7 @@ class ZVMDriver(driver.ComputeDriver):
                             context, instance, injected_files, admin_password)
 
             resp = self._get_image_info(context, image_meta.id, os_distro)
-            spawn_image_name = resp[0][0]
+            spawn_image_name = resp[0]['imagename']
             disk_list, eph_list = self._set_disk_list(instance,
                                                       spawn_image_name,
                                                       block_device_info)
